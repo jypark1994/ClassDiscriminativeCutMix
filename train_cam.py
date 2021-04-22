@@ -8,6 +8,7 @@ import time
 import torch
 import torch.nn as nn
 import torch.nn.parallel
+import torch.nn.functional as F
 import torch.backends.cudnn as cudnn
 import torch.optim
 import torch.utils.data
@@ -67,26 +68,56 @@ parser.add_argument('--cutmix_prob', default=0, type=float,
                     help='cutmix probability')
 parser.add_argument('--device', default='0', type=str,
                     help='Target GPU for computation')
-parser.add_argument('--pretrained', default='./pretrained/R50_ImageNet_Baseline.pth', type=str,
+parser.add_argument('--pretrained', default='./pretrained/R50_Baseline.tar', type=str,
                     help='Pretrained *.pth path')
 
 
 parser.set_defaults(bottleneck=True)
 parser.set_defaults(verbose=True)
 
-# args.dataset = args.dataset.lower()
-
 best_err1 = 100
 best_err5 = 100
 
+def generate_attentive_mask(attention_map, top_k):
+    """
+        Input:
+            attention_map   (Tensor) : NxWxH tensor after GAP.
+            top_k           (Tensor) : Number of candidates of the most intense points.
+        Output:
+            mask            (Tensor) : NxWxH tensor for masking attentive regions
+            coords          (Tensor) : Normalized coordinates(cx, cy) for masked regions
+    """
+    N, W, H = attention_map.shape
+    x = attention_map.reshape([N, W *H])
+
+    _, indices = torch.sort(x, descending=True, dim=1)
+
+    top_indices = indices[:, :top_k]
+
+    cell_width, cell_height = 1/W, 1/H
+
+    rows, cols = (top_indices//W)/N, (top_indices%W)/N
+    cx = cell_width/2 + rows*cell_width
+    cy = cell_height/2 + cols*cell_height
+    coords = torch.cat((cx, cy), dim=0).T
+
+    print(cx, cy)
+    print(coords)
+
+    mask = x.clone()
+
+    for i in range(N):
+        mask[i, top_indices[i]] = 0
+
+    mask = mask.reshape([N, W, H])
+    # print(mask)
+    mask[mask != 0] = 1
+
+    return mask, coords
 
 def main():
     global args, best_err1, best_err5
     args = parser.parse_args()
-
-    directory = "runs/%s/" % (args.expname)
-    if not os.path.exists(directory):
-        os.makedirs(directory, exist_ok=True)
 
     os.environ['CUDA_VISIBLE_DEVICES'] = args.device
 
@@ -125,16 +156,17 @@ def main():
         else:
             raise Exception('unknown dataset: {}'.format(args.dataset))
     elif args.dataset == 'mosquitodl':
-        init_scale = 1.15
         transforms_train = transforms.Compose([
             transforms.ColorJitter(brightness=0.1,contrast=0.2,saturation=0.2,hue=0.1),
-            transforms.RandomAffine(360,scale=[init_scale-0.15, init_scale+0.4]),
+            transforms.RandomAffine(360,scale=[1.55, 1.9]),
+            transforms.Resize(224),
             transforms.CenterCrop(224),
             transforms.ToTensor(),
             # transforms.Normalize(mean=[0.816, 0.744, 0.721],std=[0.146, 0.134, 0.121]),
         ])
 
         transforms_test = transforms.Compose([
+            transforms.Resize(224),
             transforms.CenterCrop(224),
             transforms.ToTensor(),
         ])
@@ -225,18 +257,21 @@ def main():
     model = torch.nn.DataParallel(model).cuda()
     print('the number of model parameters: {}'.format(sum([p.data.nelement() for p in model.parameters()])))
 
-    if args.pretrained != None:
-        pretrained_dict = torch.load(args.pretrained)['state_dict']
-        new_model_dict = model.state_dict()
+    pretrained_dict = torch.load(args.pretrained)['state_dict']
+    new_model_dict = model.state_dict()
 
-        for k, v in new_model_dict.items():
-            if 'fc' in k:
-                continue
-            else:
-                new_model_dict[k] = pretrained_dict[k]
-        
-        
-        model.load_state_dict(new_model_dict)
+    for k, v in new_model_dict.items():
+        if 'fc' in k:
+            continue
+        else:
+            new_model_dict[k] = v
+
+    model.load_state_dict(new_model_dict)
+
+    def get_class_activation(module, input, output):
+        activation[module] = output.data
+
+    model._modules.get('layer4').register_forward_hook(get_class_activation)
 
     # define loss function (criterion) and optimizer
     criterion = nn.CrossEntropyLoss().cuda()
@@ -247,12 +282,10 @@ def main():
 
     cudnn.benchmark = True
 
-    epoch_t_end = 0
-
     for epoch in range(0, args.epochs):
 
         adjust_learning_rate(optimizer, epoch)
-        epoch_t_start = time.time()
+
         # train for one epoch
         train_loss = train(train_loader, model, criterion, optimizer, epoch)
 
@@ -274,11 +307,6 @@ def main():
             'best_err5': best_err5,
             'optimizer': optimizer.state_dict(),
         }, is_best)
-
-        epoch_t_end = time.time() - epoch_t_start
-        print(f'- Epoch time: {epoch_t_end:.4f}[sec]')
-        print(f'- Estimated time left: {epoch_t_end*(args.epochs - epoch):.4f}[sec]')
-        print('-'*30)
 
     print('Best accuracy (top-1 and 5 error):', best_err1, best_err5)
 
@@ -310,13 +338,17 @@ def train(train_loader, model, criterion, optimizer, epoch):
             rand_index = torch.randperm(input.size()[0]).cuda()
             target_a = target
             target_b = target[rand_index]
-            # TODO: Replace rand_bbox() to activation_area() function
             bbx1, bby1, bbx2, bby2 = rand_bbox(input.size(), lam)
             input[:, :, bbx1:bbx2, bby1:bby2] = input[rand_index, :, bbx1:bbx2, bby1:bby2]
             # adjust lambda to exactly match pixel ratio
             lam = 1 - ((bbx2 - bbx1) * (bby2 - bby1) / (input.size()[-1] * input.size()[-2]))
             # Save Input Examples
-            
+            input_ex = make_grid(input.detach().cpu(), nrow=8, padding=2).permute([1,2,0])
+            fig, ax = plt.subplots(1,1)
+            ax.imshow(input_ex)
+            ax.set_title(f"Batch Examples\nBeta:{args.beta}, Lambda:{lam}, Cut_Prob:{args.cutmix_prob}")
+            ax.axis('off')
+            fig.savefig(os.path.join('./runs/',args.expname, f"sample_Beta_{args.beta}_Prob_{str(args.cutmix_prob).replace('.','_')}.png"))
 
             # compute output
             output = model(input)
@@ -324,16 +356,48 @@ def train(train_loader, model, criterion, optimizer, epoch):
         else:
             # compute output
             output = model(input)
-            loss = criterion(output, target)
 
-        if i%40 == 0 and epoch == 0:
-            input_ex = make_grid(input.detach().cpu(), normalize=True, nrow=8, padding=2).permute([1,2,0])
-            fig, ax = plt.subplots(1,1,figsize=(10,16))
-            ax.imshow(input_ex)
-            ax.set_title(f"Training Batch Examples\nBeta:{args.beta}, Cut_Prob:{args.cutmix_prob}")
-            ax.axis('off')
-        
-            fig.savefig(os.path.join('./runs/',args.expname, f"sample_train_Beta_{args.beta}_Prob_{str(args.cutmix_prob).replace('.','_')}_{i}.png"))
+            # TODO: Get prediction probability.
+            softened_logits = nn.Softmax()(output)
+
+            # TODO: Find most/least class. (index, score)
+            most_likely_classes, most_likely_scores = torch.argmax(softened_logits, dim=1)
+            least_likely_classes, least_likely_scores = torch.argmin(softened_logits, dim=1)
+            # IDEA: If there are no least likely sample in the mini-batch, select the next one.
+
+            # TODO: Acquire activation maps from the final layer.
+            final_fmap = activation['module.layer4']
+            N, C, W, H = final_fmap.shape
+            
+            # TODO: Generate CAM in NxWxH dimension. (N samples of WxH images in a mini-batch)
+
+            weight = model.state_dict()['module.fc.weight'].data.detach()
+            
+            # TODO: Generate CAM for the most similar class.
+            # Dot product between weight and feature maps for each channel (weight_shape: [N_Classes, 2048])
+            for ch_idx in range(weight.shape[1]): # Don't use ReLU in original CAM(CVPR 2017, Zhou et al.)
+                final_fmap[:, ch_idx, :, :] = weight[most_likely_classes, ch_idx] * final_fmap[:, ch_idx, :, :]
+            
+            class_activation_maps = final_fmap.mean(dim=1) # N x C x W x H -> N x W x H
+
+            # Validate Class Activation Map
+
+            cam_grid = make_grid(class_activation_maps, nrow=4)
+            plt.matshow(cam_grid, cmap='viridian', vmin=0, vmax=1) 
+
+            # TODO: Acquire Highly Activated Region Informations (Grid based)
+            #   - Consideration: Allow or not to select multiple regions ... (grid-based?, contour detection?)
+            #   - Attentive CutMix(2020) uses highly activated top N patches from 7x7 grid map.
+
+            attention_mask, coords = generate_attentive_mask(class_activation_maps, top_k = 3)
+
+            # TODO: Generate Normalized BBox coordnates (x_min, y_min, x_max, y_max)
+
+            # TODO: Find the least likely image from the batch (least_likely_img)
+
+            # TODO: Paste the least likely image on the generated bbox area.
+
+            loss = criterion(output, target)
 
         # measure accuracy and record loss
         err1, err5 = accuracy(output.data, target, topk=(1, 5))
@@ -415,15 +479,6 @@ def validate(val_loader, model, criterion, epoch):
         batch_time.update(time.time() - end)
         end = time.time()
 
-        if i%40 == 0 and epoch == 0:
-            input_ex = make_grid(input.detach().cpu(), normalize=True, nrow=8, padding=2).permute([1,2,0])
-            fig, ax = plt.subplots(1,1,figsize=(10,16))
-            ax.imshow(input_ex)
-            ax.set_title(f"Validation Batch Examples")
-            ax.axis('off')
-        
-            fig.savefig(os.path.join('./runs/',args.expname, f"sample_valid_Beta_{args.beta}_Prob_{str(args.cutmix_prob).replace('.','_')}_{i}.png"))
-
         if i % args.print_freq == 0 and args.verbose == True:
             print('Test (on val set): [{0}/{1}][{2}/{3}]\t'
                   'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
@@ -476,12 +531,13 @@ def adjust_learning_rate(optimizer, epoch):
             lr = args.lr * (0.1 ** (epoch // 75))
         else:
             lr = args.lr * (0.1 ** (epoch // 30))
-
-    elif args.dataset == ('cub200'):
-        lr = args.lr * (0.1 ** (epoch // 30))
-
-    elif args.dataset == ('mosquitodl'):
-        lr = args.lr * (0.1 ** (epoch // 50))
+    else:
+        if epoch < 50:
+            lr = args.lr
+        elif epoch >= 50 and epoch < 100:
+            lr = args.lr * 0.1
+        elif epoch >= 100 and epoch < 150:
+            lr = args.lr * 0.01 
 
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr

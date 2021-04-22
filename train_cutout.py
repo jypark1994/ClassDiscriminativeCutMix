@@ -25,6 +25,7 @@ import matplotlib.pyplot as plt
 import warnings
 
 from cub200 import CUB200
+from cutout import Cutout
 
 warnings.filterwarnings("ignore")
 
@@ -61,10 +62,10 @@ parser.add_argument('--alpha', default=300, type=float,
                     help='number of new channel increases per depth (default: 300)')
 parser.add_argument('--expname', default='TEST', type=str,
                     help='name of experiment')
-parser.add_argument('--beta', default=1, type=float,
-                    help='hyperparameter beta')
-parser.add_argument('--cutmix_prob', default=0, type=float,
-                    help='cutmix probability')
+parser.add_argument('--n_holes', type=int, default=1,
+                    help='number of holes to cut out from image')
+parser.add_argument('--length', type=int, default=16,
+                    help='length of the holes')
 parser.add_argument('--device', default='0', type=str,
                     help='Target GPU for computation')
 parser.add_argument('--pretrained', default='./pretrained/R50_ImageNet_Baseline.pth', type=str,
@@ -73,8 +74,6 @@ parser.add_argument('--pretrained', default='./pretrained/R50_ImageNet_Baseline.
 
 parser.set_defaults(bottleneck=True)
 parser.set_defaults(verbose=True)
-
-# args.dataset = args.dataset.lower()
 
 best_err1 = 100
 best_err5 = 100
@@ -98,6 +97,7 @@ def main():
             transforms.RandomCrop(32, padding=4),
             transforms.RandomHorizontalFlip(),
             transforms.ToTensor(),
+            Cutout(n_holes=args.n_holes, length=args.length),
             normalize,
         ])
 
@@ -125,16 +125,22 @@ def main():
         else:
             raise Exception('unknown dataset: {}'.format(args.dataset))
     elif args.dataset == 'mosquitodl':
-        init_scale = 1.15
+
+        init_scale = 1.5
+
         transforms_train = transforms.Compose([
             transforms.ColorJitter(brightness=0.1,contrast=0.2,saturation=0.2,hue=0.1),
-            transforms.RandomAffine(360,scale=[init_scale-0.15, init_scale+0.4]),
-            transforms.CenterCrop(224),
+            transforms.RandomAffine(360,scale=[init_scale-0.15,init_scale+0.15]),
+            transforms.Resize(224),
+            transforms.RandomCrop(224), 
+            # In 2020, we used center cropping for MosquitoDL, but we replaced to random cropping to prevent further overfitting.
             transforms.ToTensor(),
+            Cutout(n_holes=args.n_holes, length=args.length),
             # transforms.Normalize(mean=[0.816, 0.744, 0.721],std=[0.146, 0.134, 0.121]),
         ])
 
         transforms_test = transforms.Compose([
+            transforms.Resize(224),
             transforms.CenterCrop(224),
             transforms.ToTensor(),
         ])
@@ -153,6 +159,7 @@ def main():
                 transforms.RandomHorizontalFlip(),
                 transforms.CenterCrop(224),
                 transforms.ToTensor(),
+                Cutout(n_holes=args.n_holes, length=args.length),
                 transforms.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225))
         ])
         val_transforms = transforms.Compose([
@@ -190,6 +197,7 @@ def main():
                 transforms.ToTensor(),
                 jittering,
                 lighting,
+                Cutout(n_holes=args.n_holes, length=args.length),
                 normalize,
             ]))
 
@@ -277,12 +285,11 @@ def main():
 
         epoch_t_end = time.time() - epoch_t_start
         print(f'- Epoch time: {epoch_t_end:.4f}[sec]')
-        print(f'- Estimated time left: {epoch_t_end*(args.epochs - epoch):.4f}[sec]')
+        print(f'- Estimated time left: {epoch_t_end*(args.epochs - epoch)/3600:.4f}[Hours]')
         print('-'*30)
 
     print('Best accuracy (top-1 and 5 error):', best_err1, best_err5)
-
-
+    
 
 def train(train_loader, model, criterion, optimizer, epoch):
     batch_time = AverageMeter()
@@ -302,38 +309,19 @@ def train(train_loader, model, criterion, optimizer, epoch):
 
         input = input.cuda()
         target = target.cuda()
-
-        r = np.random.rand(1)
-        if args.beta > 0 and r < args.cutmix_prob:
-            # generate mixed sample
-            lam = np.random.beta(args.beta, args.beta)
-            rand_index = torch.randperm(input.size()[0]).cuda()
-            target_a = target
-            target_b = target[rand_index]
-            # TODO: Replace rand_bbox() to activation_area() function
-            bbx1, bby1, bbx2, bby2 = rand_bbox(input.size(), lam)
-            input[:, :, bbx1:bbx2, bby1:bby2] = input[rand_index, :, bbx1:bbx2, bby1:bby2]
-            # adjust lambda to exactly match pixel ratio
-            lam = 1 - ((bbx2 - bbx1) * (bby2 - bby1) / (input.size()[-1] * input.size()[-2]))
-            # Save Input Examples
-            
-
-            # compute output
-            output = model(input)
-            loss = criterion(output, target_a) * lam + criterion(output, target_b) * (1. - lam)
-        else:
-            # compute output
-            output = model(input)
-            loss = criterion(output, target)
+    
+        # compute output
+        output = model(input)
+        loss = criterion(output, target)
 
         if i%40 == 0 and epoch == 0:
             input_ex = make_grid(input.detach().cpu(), normalize=True, nrow=8, padding=2).permute([1,2,0])
-            fig, ax = plt.subplots(1,1,figsize=(10,16))
+            fig, ax = plt.subplots(1,1,figsize=(8,4))
             ax.imshow(input_ex)
-            ax.set_title(f"Training Batch Examples\nBeta:{args.beta}, Cut_Prob:{args.cutmix_prob}")
+            ax.set_title(f"Training Batch Examples\nLength:{args.length}, Num_holes:{args.n_holes}")
             ax.axis('off')
         
-            fig.savefig(os.path.join('./runs/',args.expname, f"sample_train_Beta_{args.beta}_Prob_{str(args.cutmix_prob).replace('.','_')}_{i}.png"))
+            fig.savefig(os.path.join('./runs/',args.expname, f"sample_train_Len_{args.length}_Holes_{args.n_holes}_{i}.png"))
 
         # measure accuracy and record loss
         err1, err5 = accuracy(output.data, target, topk=(1, 5))
@@ -366,26 +354,6 @@ def train(train_loader, model, criterion, optimizer, epoch):
         epoch, args.epochs, top1=top1, top5=top5, loss=losses))
 
     return losses.avg
-
-
-def rand_bbox(size, lam):
-    W = size[2]
-    H = size[3]
-    cut_rat = np.sqrt(1. - lam)
-    cut_w = np.int(W * cut_rat)
-    cut_h = np.int(H * cut_rat)
-
-    # uniform
-    cx = np.random.randint(W)
-    cy = np.random.randint(H)
-
-    bbx1 = np.clip(cx - cut_w // 2, 0, W)
-    bby1 = np.clip(cy - cut_h // 2, 0, H)
-    bbx2 = np.clip(cx + cut_w // 2, 0, W)
-    bby2 = np.clip(cy + cut_h // 2, 0, H)
-
-    return bbx1, bby1, bbx2, bby2
-
 
 def validate(val_loader, model, criterion, epoch):
     batch_time = AverageMeter()
@@ -422,7 +390,7 @@ def validate(val_loader, model, criterion, epoch):
             ax.set_title(f"Validation Batch Examples")
             ax.axis('off')
         
-            fig.savefig(os.path.join('./runs/',args.expname, f"sample_valid_Beta_{args.beta}_Prob_{str(args.cutmix_prob).replace('.','_')}_{i}.png"))
+            fig.savefig(os.path.join('./runs/',args.expname, f"sample_valid_{i}.png"))
 
         if i % args.print_freq == 0 and args.verbose == True:
             print('Test (on val set): [{0}/{1}][{2}/{3}]\t'
