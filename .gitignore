@@ -4,3 +4,4 @@ runs/
 pretrained/
 train_nsml.py
 requirements.txt
+*.txt

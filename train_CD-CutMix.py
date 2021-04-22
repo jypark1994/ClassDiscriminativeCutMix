@@ -3,11 +3,13 @@
 import argparse
 import os
 import shutil
+import random
 import time
 
 import torch
 import torch.nn as nn
 import torch.nn.parallel
+import torch.nn.functional as F
 import torch.backends.cudnn as cudnn
 import torch.optim
 import torch.utils.data
@@ -25,7 +27,6 @@ import matplotlib.pyplot as plt
 import warnings
 
 from cub200 import CUB200
-from cutout import Cutout
 
 warnings.filterwarnings("ignore")
 
@@ -33,7 +34,7 @@ model_names = sorted(name for name in models.__dict__
                      if name.islower() and not name.startswith("__")
                      and callable(models.__dict__[name]))
 
-parser = argparse.ArgumentParser(description='Cutmix PyTorch CIFAR-10, CIFAR-100 and ImageNet-1k Training')
+parser = argparse.ArgumentParser(description='Attentive CutMix PyTorch CUB-200, MosqutoDL Training')
 parser.add_argument('--net_type', default='pyramidnet', type=str,
                     help='networktype: resnet, and pyamidnet')
 parser.add_argument('-j', '--workers', default=4, type=int, metavar='N',
@@ -62,15 +63,15 @@ parser.add_argument('--alpha', default=300, type=float,
                     help='number of new channel increases per depth (default: 300)')
 parser.add_argument('--expname', default='TEST', type=str,
                     help='name of experiment')
-parser.add_argument('--n_holes', type=int, default=1,
-                    help='number of holes to cut out from image')
-parser.add_argument('--length', type=int, default=16,
-                    help='length of the holes')
+parser.add_argument('--beta', default=1, type=float,
+                    help='hyperparameter beta')
 parser.add_argument('--device', default='0', type=str,
                     help='Target GPU for computation')
 parser.add_argument('--pretrained', default='./pretrained/R50_ImageNet_Baseline.pth', type=str,
                     help='Pretrained *.pth path')
 
+parser.add_argument('--k', default=3, type=int, help='Number of most activated patches on the final layer.')
+parser.add_argument('--cut_prob', default=0, type=float, help='Attentive CutMix probability')
 
 parser.set_defaults(bottleneck=True)
 parser.set_defaults(verbose=True)
@@ -78,6 +79,44 @@ parser.set_defaults(verbose=True)
 best_err1 = 100
 best_err5 = 100
 
+dict_activation = {}
+
+def generate_attentive_mask(attention_map, top_k):
+    """
+        Input:
+            attention_map   (Tensor) : NxWxH tensor after GAP.
+            top_k           (Tensor) : Number of candidates of the most intense points.
+        Output:
+            mask            (Tensor) : NxWxH tensor for masking attentive regions
+            coords          (Tensor) : Normalized coordinates(cx, cy) for masked regions
+    """
+    N, W, H = attention_map.shape
+    x = attention_map.reshape([N, W *H])
+
+    _, indices = torch.sort(x, descending=True, dim=1)
+
+    top_indices = indices[:, :top_k]
+
+    cell_width, cell_height = 1/W, 1/H
+
+    rows, cols = (top_indices//W)/N, (top_indices%W)/N
+    cx = cell_width/2 + rows*cell_width
+    cy = cell_height/2 + cols*cell_height
+    coords = torch.cat((cx, cy), dim=0).T
+
+    # print(cx, cy)
+    # print(coords)
+
+    mask = x.clone()
+
+    for i in range(N):
+        mask[i, top_indices[i]] = 0
+
+    mask = mask.reshape([N, W, H])
+    # print(mask)
+    mask[mask != 0] = 1
+
+    return mask, coords
 
 def main():
     global args, best_err1, best_err5
@@ -97,7 +136,6 @@ def main():
             transforms.RandomCrop(32, padding=4),
             transforms.RandomHorizontalFlip(),
             transforms.ToTensor(),
-            Cutout(n_holes=args.n_holes, length=args.length),
             normalize,
         ])
 
@@ -125,17 +163,12 @@ def main():
         else:
             raise Exception('unknown dataset: {}'.format(args.dataset))
     elif args.dataset == 'mosquitodl':
-
-        init_scale = 1.15
-
         transforms_train = transforms.Compose([
             transforms.ColorJitter(brightness=0.1,contrast=0.2,saturation=0.2,hue=0.1),
-            transforms.RandomAffine(360,scale=[init_scale-0.15,init_scale+0.4]),
+            transforms.RandomAffine(360,scale=[1.55, 1.9]),
             transforms.Resize(224),
-            transforms.RandomCrop(224), 
-            # In 2020, we used center cropping for MosquitoDL, but we replaced to random cropping to prevent further overfitting.
+            transforms.CenterCrop(224),
             transforms.ToTensor(),
-            Cutout(n_holes=args.n_holes, length=args.length),
             # transforms.Normalize(mean=[0.816, 0.744, 0.721],std=[0.146, 0.134, 0.121]),
         ])
 
@@ -159,7 +192,6 @@ def main():
                 transforms.RandomHorizontalFlip(),
                 transforms.CenterCrop(224),
                 transforms.ToTensor(),
-                Cutout(n_holes=args.n_holes, length=args.length),
                 transforms.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225))
         ])
         val_transforms = transforms.Compose([
@@ -197,7 +229,6 @@ def main():
                 transforms.ToTensor(),
                 jittering,
                 lighting,
-                Cutout(n_holes=args.n_holes, length=args.length),
                 normalize,
             ]))
 
@@ -232,8 +263,10 @@ def main():
 
     model = torch.nn.DataParallel(model).cuda()
     print('the number of model parameters: {}'.format(sum([p.data.nelement() for p in model.parameters()])))
+    
+    if args.pretrained:
+        print(f"Load pretrained weights from \'{args.pretrained}\'.")
 
-    if args.pretrained != None:
         pretrained_dict = torch.load(args.pretrained)['state_dict']
         new_model_dict = model.state_dict()
 
@@ -241,10 +274,18 @@ def main():
             if 'fc' in k:
                 continue
             else:
-                new_model_dict[k] = pretrained_dict[k]
-        
-        
+                new_model_dict[k] = v
+
         model.load_state_dict(new_model_dict)
+
+    def get_class_activation(name, input, output):
+        dict_activation['layer4'] = output.data
+
+    for k, v in model.named_modules():
+        if 'layer4' in k:
+            v.register_forward_hook(get_class_activation)
+            print(f"Registered forward hook on \'{k}\'")
+            break
 
     # define loss function (criterion) and optimizer
     criterion = nn.CrossEntropyLoss().cuda()
@@ -255,12 +296,12 @@ def main():
 
     cudnn.benchmark = True
 
-    epoch_t_end = 0
-
     for epoch in range(0, args.epochs):
 
         adjust_learning_rate(optimizer, epoch)
+        
         epoch_t_start = time.time()
+
         # train for one epoch
         train_loss = train(train_loader, model, criterion, optimizer, epoch)
 
@@ -284,14 +325,17 @@ def main():
         }, is_best)
 
         epoch_t_end = time.time() - epoch_t_start
+
         print(f'- Epoch time: {epoch_t_end:.4f}[sec]')
-        print(f'- Estimated time left: {epoch_t_end*(args.epochs - epoch)/3600:.4f}[Hours]')
+        print(f'- Estimated time left: {epoch_t_end*(args.epochs - epoch):.4f}[sec]')
         print('-'*30)
 
     print('Best accuracy (top-1 and 5 error):', best_err1, best_err5)
-    
+
+
 
 def train(train_loader, model, criterion, optimizer, epoch):
+
     batch_time = AverageMeter()
     data_time = AverageMeter()
     losses = AverageMeter()
@@ -308,20 +352,126 @@ def train(train_loader, model, criterion, optimizer, epoch):
         data_time.update(time.time() - end)
 
         input = input.cuda()
-        target = target.cuda()
-    
-        # compute output
-        output = model(input)
-        loss = criterion(output, target)
+        _, _, W, H = input.shape
 
-        if i % 40 == 0 and epoch == 0:
-            input_ex = make_grid(input.detach().cpu(), normalize=True, nrow=8, padding=2).permute([1,2,0])
-            fig, ax = plt.subplots(1,1,figsize=(8,4))
-            ax.imshow(input_ex)
-            ax.set_title(f"Training Batch Examples\nLength:{args.length}, Num_holes:{args.n_holes}")
-            ax.axis('off')
-        
-            fig.savefig(os.path.join('./runs/',args.expname, f"sample_train_Len_{args.length}_Holes_{args.n_holes}_{i}.png"))
+        target = target.cuda()
+
+        r = 0
+        if args.cut_prob != 0:
+            r = np.random.rand(1)
+
+        if r < args.cut_prob:
+
+            # compute feature maps
+            output = model(input)
+
+            # TODO: Acquire activation maps from the final layer.
+            final_fmap = dict_activation['layer4'].mean(dim=1) # Shape: [N x W_f x H_f]
+            N, W_f, H_f = final_fmap.shape
+
+            # Visualizing Activation Map
+            # ========== Uncomment to put visualization =========== 
+            # final_fmap_to_visualize = final_fmap.unsqueeze(1).repeat(1,3,1,1)
+            # cam_grid = make_grid(final_fmap_to_visualize.detach().cpu(), nrow=4).permute([1,2,0])
+            # plt.imshow(cam_grid)
+            # plt.axis('off')
+            # plt.savefig('[Debug] Visualize Activation.png')
+            # exit()
+            # =====================================================
+
+            # Acquire Highly Activated Region Informations (Grid based)
+            #   - Consideration: Allow or not to select multiple patches ... (grid-based?, contour detection?)
+            #   - Attentive CutMix(2020) uses highly activated top N patches from 7x7 grid map.
+            #   - Generate Normalized BBox coordnates (x_min, y_min, x_max, y_max)
+             # TODO: Get prediction probability.
+            softened_logits = nn.Softmax()(output)
+
+            # TODO: Find most/least class. (index, score)
+            most_likely_classes, most_likely_scores = torch.argmax(softened_logits, dim=1)
+            # Both are vectors in shape [N]
+            least_likely_classes, least_likely_scores = torch.argmin(softened_logits, dim=1)
+            # Both are vectors in shape [N]
+            
+            # IDEA: If there are no least likely sample in the mini-batch, select the next one.
+
+            # TODO: Acquire activation maps from the final layer.
+            final_fmap = activation['module.layer4']
+            N, C, W, H = final_fmap.shape
+            
+            # TODO: Generate CAM in NxWxH dimension. (N samples of WxH images in a mini-batch)
+
+            weight = model.state_dict()['module.fc.weight'].data.detach()
+            
+            # TODO: Generate CAM for the most similar class.
+            # Dot product between weight and feature maps for each channel (weight_shape: [N_Classes, 2048])
+            for ch_idx in range(weight.shape[1]): # Don't use ReLU in original CAM(CVPR 2017, Zhou et al.)
+                final_fmap[:, ch_idx, :, :] = weight[most_likely_classes, ch_idx] * final_fmap[:, ch_idx, :, :]
+            
+            class_activation_maps = final_fmap.mean(dim=1) # N x C x W x H -> N x W x H
+
+            # Validate Class Activation Map
+
+            # cam_grid = make_grid(class_activation_maps, nrow=4)
+            # plt.matshow(cam_grid, cmap='viridian', vmin=0, vmax=1) 
+
+            # TODO: Acquire Highly Activated Region Informations (Grid based)
+            #   - Consideration: Allow or not to select multiple regions ... (grid-based?, contour detection?)
+            #   - Attentive CutMix(2020) uses highly activated top N patches from 7x7 grid map.
+            #   - Generate Normalized BBox coordnates (x_min, y_min, x_max, y_max)
+
+            attention_masks, coords = generate_attentive_mask(class_activation_maps, top_k = args.k) # Grid-based, Masking Top k samples
+            # attention_masks: [N, W, H]
+            # coords: [[cx_1, cy_1] ... [cx_k, cy_k]]
+
+            cam_masked = attention_masks * class_activation_maps # [N, W, H] = [N, W, H] * [N, W, H]
+
+            # TODO: Find the least likely image from the batch (least_likely_img)
+            #   - If not? -> Randomly choose from the mini-batch.
+            for c in least_likely_classes:
+                if c in target:
+                    print("Found the least likely class sample")
+                else:
+                    print("Cannot found the least least likely class sample")
+                    # Sampling batch index except current batch.
+                    rand_b_index = torch.choice(torch.randperm(input.size()[0]).cuda())
+            # In tech report, they tested top_k 1~15, and suggested 6 is proper.
+            # attention_masks: [N, W_f, H_f]
+            # coords: [[cx_1, cy_1] ... [cx_k, cy_k]]
+            # print(attention_masks.shape)
+
+            upsampled_attention_masks = F.interpolate(attention_masks.unsqueeze(1).repeat([1,3,1,1]), 
+                size=input.shape[-2:], mode='nearest') # [N, W_f, H_f] -> [N, 1, W_f, H_f] -> [N, 3, W_f, H_f] -> [N, C, W, H]
+            # print(upsampled_attention_masks.shape)
+
+            occluded_batch = input * upsampled_attention_masks #[N, C, W, H] * [N, C, W, H]
+            # print(occluded_batch.shape)
+
+            n_occluded_pixels = args.k
+            n_total_pixels = W*H
+            
+            lam = 1 - (n_occluded_pixels/n_total_pixels) # 1 - Mixed Ratio
+
+            target_a = target
+            target_b = target[rand_index]
+            
+            occluded_batch = upsampled_attention_masks * input + (1 - upsampled_attention_masks) * input[rand_index]
+            # Replace holes to images.
+
+            if i % 100 == 0 and epoch % 10 == 0:
+                cam_grid = make_grid(occluded_batch.detach().cpu(), normalize=True, nrow=8).permute([1,2,0])
+                plt.imshow(cam_grid)
+                plt.title(f"Class Attentive CutMix Batch Sample at k={args.k}")
+                plt.axis('off')
+                plt.savefig(os.path.join('./runs/',args.expname, f'Occluded Batch K{args.k}_E{epoch}_B{i}.png'))
+
+            output = model(occluded_batch)
+
+            loss = criterion(output, target_a) * lam + criterion(output, target_b) * (1 - lam)
+
+        else:
+            output = model(input)
+
+            loss = criterion(output, target)
 
         # measure accuracy and record loss
         err1, err5 = accuracy(output.data, target, topk=(1, 5))
@@ -355,6 +505,26 @@ def train(train_loader, model, criterion, optimizer, epoch):
 
     return losses.avg
 
+
+def rand_bbox(size, lam):
+    W = size[2]
+    H = size[3]
+    cut_rat = np.sqrt(1. - lam)
+    cut_w = np.int(W * cut_rat)
+    cut_h = np.int(H * cut_rat)
+
+    # uniform
+    cx = np.random.randint(W)
+    cy = np.random.randint(H)
+
+    bbx1 = np.clip(cx - cut_w // 2, 0, W)
+    bby1 = np.clip(cy - cut_h // 2, 0, H)
+    bbx2 = np.clip(cx + cut_w // 2, 0, W)
+    bby2 = np.clip(cy + cut_h // 2, 0, H)
+
+    return bbx1, bby1, bbx2, bby2
+
+
 def validate(val_loader, model, criterion, epoch):
     batch_time = AverageMeter()
     losses = AverageMeter()
@@ -382,15 +552,6 @@ def validate(val_loader, model, criterion, epoch):
         # measure elapsed time
         batch_time.update(time.time() - end)
         end = time.time()
-
-        if i%40 == 0 and epoch == 0:
-            input_ex = make_grid(input.detach().cpu(), normalize=True, nrow=8, padding=2).permute([1,2,0])
-            fig, ax = plt.subplots(1,1,figsize=(10,16))
-            ax.imshow(input_ex)
-            ax.set_title(f"Validation Batch Examples")
-            ax.axis('off')
-        
-            fig.savefig(os.path.join('./runs/',args.expname, f"sample_valid_{i}.png"))
 
         if i % args.print_freq == 0 and args.verbose == True:
             print('Test (on val set): [{0}/{1}][{2}/{3}]\t'

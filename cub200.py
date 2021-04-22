@@ -6,6 +6,10 @@ from torch.utils.data import Dataset
 
 
 class CUB200(Dataset):
+    """
+        Download from URL currently unavailable due to the Google Drive download policy.
+        Access the URL directly on web browser and download it manually.
+    """
     base_folder = 'CUB_200_2011/images'
     url = 'http://www.vision.caltech.edu/visipedia-data/CUB-200-2011/CUB_200_2011.tgz'
     filename = 'CUB_200_2011.tgz'
