@@ -417,6 +417,8 @@ def train(train_loader, model, criterion, optimizer, epoch):
                 plt.axis('off')
                 plt.savefig(os.path.join('./runs/',args.expname, f'Occluded Batch K{args.k}_E{epoch}_B{i}.png'))
 
+            optimizer.zero_grad()
+
             output = model(occluded_batch)
 
             loss = criterion(output, target_a) * lam + criterion(output, target_b) * (1 - lam)
