@@ -69,6 +69,7 @@ parser.add_argument('--pretrained', default='./pretrained/R50_ImageNet_Baseline.
 
 parser.add_argument('--k', default=3, type=int, help='Number of most activated patches on the final layer.')
 parser.add_argument('--cut_prob', default=0, type=float, help='Attentive CutMix probability')
+parser.add_argument('--image_priority', default='A', type=str, help='Which image will be filled on the top K regions?')
 
 parser.set_defaults(bottleneck=True)
 parser.set_defaults(verbose=True)
@@ -354,19 +355,22 @@ def train(train_loader, model, criterion, optimizer, epoch):
             n_occluded_pixels = args.k # Important regions are occluded. (Replaced)
             n_total_pixels = W_f * H_f # Area of target class activation map
 
-            image_a = (1 - upsampled_attention_masks) * input
-            image_b = upsampled_attention_masks * input[rand_index]
+            rand_index = torch.randperm(input.size()[0]).cuda() # Randomly select image sample to pasted from the batch
+
+            if args.image_priority == 'A':
+                image_a = (1 - upsampled_attention_masks) * input # Top K of image A
+                image_b = upsampled_attention_masks * input[rand_index]
+            elif args.image_priority == 'B':
+                image_a = upsampled_attention_masks * input
+                image_b = (1-upsampled_attention_masks) * input[rand_index] # Top K of image B
 
             input = image_a + image_b
             
             occlusion_ratio = (n_occluded_pixels/n_total_pixels) # 1 - Mixed Ratio
 
-            rand_index = torch.randperm(input.size()[0]).cuda() # Randomly select image sample to pasted from the batch
+            
             target_a = target
             target_b = target[rand_index]
-
-            
-            
             
 
             optimizer.zero_grad()
