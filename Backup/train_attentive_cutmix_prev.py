@@ -3,6 +3,7 @@
 import argparse
 import os
 import shutil
+import random
 import time
 
 import torch
@@ -33,10 +34,10 @@ model_names = sorted(name for name in models.__dict__
                      if name.islower() and not name.startswith("__")
                      and callable(models.__dict__[name]))
 
-parser = argparse.ArgumentParser(description='Attentive Cutmix PyTorch CIFAR-10, CIFAR-100 and ImageNet-1k Training')
+parser = argparse.ArgumentParser(description='Attentive CutMix PyTorch CUB-200, MosqutoDL Training')
 parser.add_argument('--net_type', default='pyramidnet', type=str,
                     help='networktype: resnet, and pyamidnet')
-parser.add_argument('-j', '--workers', default=4, type=int, metavar='N',
+parser.add_argument('-j', '--workers', default=8, type=int, metavar='N',
                     help='number of data loading workers (default: 4)')
 parser.add_argument('--epochs', default=150, type=int, metavar='N',
                     help='number of total epochs to run')
@@ -62,6 +63,8 @@ parser.add_argument('--alpha', default=300, type=float,
                     help='number of new channel increases per depth (default: 300)')
 parser.add_argument('--expname', default='TEST', type=str,
                     help='name of experiment')
+parser.add_argument('--beta', default=1, type=float,
+                    help='hyperparameter beta')
 parser.add_argument('--device', default='0', type=str,
                     help='Target GPU for computation')
 parser.add_argument('--pretrained', default='./pretrained/R50_ImageNet_Baseline.pth', type=str,
@@ -73,13 +76,47 @@ parser.add_argument('--cut_prob', default=0, type=float, help='Attentive CutMix 
 parser.set_defaults(bottleneck=True)
 parser.set_defaults(verbose=True)
 
-# args.dataset = args.dataset.lower()
-
-dict_activation = {}
-
 best_err1 = 100
 best_err5 = 100
 
+dict_activation = {}
+
+def generate_attentive_mask(attention_map, top_k):
+    """
+        Input:
+            attention_map   (Tensor) : NxWxH tensor after GAP.
+            top_k           (Tensor) : Number of candidates of the most intense points.
+        Output:
+            mask            (Tensor) : NxWxH tensor for masking attentive regions
+            coords          (Tensor) : Normalized coordinates(cx, cy) for masked regions
+    """
+    N, W, H = attention_map.shape
+    x = attention_map.reshape([N, W *H])
+
+    _, indices = torch.sort(x, descending=True, dim=1)
+
+    top_indices = indices[:, :top_k]
+
+    cell_width, cell_height = 1/W, 1/H
+
+    rows, cols = (top_indices//W)/N, (top_indices%W)/N
+    cx = cell_width/2 + rows*cell_width
+    cy = cell_height/2 + cols*cell_height
+    coords = torch.cat((cx, cy), dim=0).T
+
+    # print(cx, cy)
+    # print(coords)
+
+    mask = x.clone()
+
+    for i in range(N):
+        mask[i, top_indices[i]] = 0
+
+    mask = mask.reshape([N, W, H])
+    # print(mask)
+    mask[mask != 0] = 1
+
+    return mask, coords
 
 def main():
     global args, best_err1, best_err5
@@ -126,16 +163,17 @@ def main():
         else:
             raise Exception('unknown dataset: {}'.format(args.dataset))
     elif args.dataset == 'mosquitodl':
-        init_scale = 1.15
         transforms_train = transforms.Compose([
             transforms.ColorJitter(brightness=0.1,contrast=0.2,saturation=0.2,hue=0.1),
-            transforms.RandomAffine(360,scale=[init_scale-0.15, init_scale+0.4]),
+            transforms.RandomAffine(360,scale=[1.55, 1.9]),
+            transforms.Resize(224),
             transforms.CenterCrop(224),
             transforms.ToTensor(),
             # transforms.Normalize(mean=[0.816, 0.744, 0.721],std=[0.146, 0.134, 0.121]),
         ])
 
         transforms_test = transforms.Compose([
+            transforms.Resize(224),
             transforms.CenterCrop(224),
             transforms.ToTensor(),
         ])
@@ -226,7 +264,9 @@ def main():
     model = torch.nn.DataParallel(model).cuda()
     print('the number of model parameters: {}'.format(sum([p.data.nelement() for p in model.parameters()])))
 
-    if args.pretrained != None:
+    if args.pretrained != 'scratch':
+        print(f"Load pretrained weights from \'{args.pretrained}\'.")
+
         pretrained_dict = torch.load(args.pretrained)['state_dict']
         new_model_dict = model.state_dict()
 
@@ -234,10 +274,11 @@ def main():
             if 'fc' in k:
                 continue
             else:
-                new_model_dict[k] = pretrained_dict[k]
-        
-        
+                new_model_dict[k] = v
+
         model.load_state_dict(new_model_dict)
+
+    
 
     def get_class_activation(name, input, output):
         dict_activation['layer4'] = output.data
@@ -257,12 +298,12 @@ def main():
 
     cudnn.benchmark = True
 
-    epoch_t_end = 0
-
     for epoch in range(0, args.epochs):
 
         adjust_learning_rate(optimizer, epoch)
+        
         epoch_t_start = time.time()
+
         # train for one epoch
         train_loss = train(train_loader, model, criterion, optimizer, epoch)
 
@@ -286,6 +327,7 @@ def main():
         }, is_best)
 
         epoch_t_end = time.time() - epoch_t_start
+
         print(f'- Epoch time: {epoch_t_end:.4f}[sec]')
         print(f'- Estimated time left: {epoch_t_end*(args.epochs - epoch):.4f}[sec]')
         print('-'*30)
@@ -295,6 +337,7 @@ def main():
 
 
 def train(train_loader, model, criterion, optimizer, epoch):
+
     batch_time = AverageMeter()
     data_time = AverageMeter()
     losses = AverageMeter()
@@ -311,11 +354,14 @@ def train(train_loader, model, criterion, optimizer, epoch):
         data_time.update(time.time() - end)
 
         input = input.cuda()
+        _, _, W, H = input.shape
+
         target = target.cuda()
 
-        r = np.random.rand(1)
-        if r < args.cut_prob:
-                        # print("Generate Mask")
+        r = 1
+
+        if False:
+            # print("Generate Mask")
             # print(f"Apply CutMix at r={r:.2f} < {args.cut_prob:.2f}")
             # compute feature maps
             output = model(input)
@@ -323,7 +369,7 @@ def train(train_loader, model, criterion, optimizer, epoch):
             # TODO: Acquire activation maps from the final layer.
             final_fmap = dict_activation['layer4'].mean(dim=1) # Shape: [N x W_f x H_f]
 
-            dict_activation['layer4'] = None # Initialize activation hook
+            # dict_activation['layer4'] = None # Initialize activation hook
             N, W_f, H_f = final_fmap.shape
 
             # Visualizing Activation Map
@@ -351,42 +397,39 @@ def train(train_loader, model, criterion, optimizer, epoch):
                 size=input.shape[-2:], mode='nearest') # [N, W_f, H_f] -> [N, 1, W_f, H_f] -> [N, 3, W_f, H_f] -> [N, C, W, H]
             # print(upsampled_attention_masks.shape)
 
-            n_occluded_pixels = args.k # Important regions are occluded. (Replaced)
-            n_total_pixels = W_f * H_f # Area of target class activation map
+            occluded_batch = input * upsampled_attention_masks #[N, C, W, H] * [N, C, W, H]
+            # print(occluded_batch.shape)
 
-            image_a = (1 - upsampled_attention_masks) * input
-            image_b = upsampled_attention_masks * input[rand_index]
-
-            input = image_a + image_b
+            n_occluded_pixels = args.k
+            n_total_pixels = W*H
             
-            occlusion_ratio = (n_occluded_pixels/n_total_pixels) # 1 - Mixed Ratio
+            lam = 1 - (n_occluded_pixels/n_total_pixels) # 1 - Mixed Ratio
 
             rand_index = torch.randperm(input.size()[0]).cuda() # Randomly select image sample to pasted from the batch
             target_a = target
             target_b = target[rand_index]
-
             
-            
-            
+            input = (1 - upsampled_attention_masks * input) * input[rand_index]
 
             optimizer.zero_grad()
 
             output = model(input)
 
-            loss = criterion(output, target_a)  * occlusion_ratio + criterion(output, target_b) * (1 - occlusion_ratio)
+            loss = criterion(output, target_a)  * (1 - lam) + criterion(output, target_b) * lam
+
         else:
-            # compute output
+            # print("Bypass")
+
             output = model(input)
+
             loss = criterion(output, target)
 
-        if i%40 == 0 and epoch == 0:
-            input_ex = make_grid(input.detach().cpu(), normalize=True, nrow=8, padding=2).permute([1,2,0])
-            fig, ax = plt.subplots(1,1,figsize=(10,16))
-            ax.imshow(input_ex)
-            ax.set_title(f"Training Batch Examples\nCut_Prob:{args.cut_prob}")
-            ax.axis('off')
-            fig.savefig(os.path.join('./runs/',args.expname, f"AttentiveCutMix_TrainBatch_K{args.k}_E{epoch}_I{i}.png"))
-        
+        if i % 100 == 0 and epoch % 10 == 0:
+            cam_grid = make_grid(input.detach().cpu(), normalize=True, nrow=8).permute([1,2,0])
+            plt.imshow(cam_grid)
+            plt.title(f"Attentive CutMix Batch Sample at k={args.k}")
+            plt.axis('off')
+            plt.savefig(os.path.join('./runs/',args.expname, f'Occluded Batch K{args.k}_E{epoch}_B{i}.png'))
 
         # measure accuracy and record loss
         err1, err5 = accuracy(output.data, target, topk=(1, 5))
@@ -468,15 +511,6 @@ def validate(val_loader, model, criterion, epoch):
         batch_time.update(time.time() - end)
         end = time.time()
 
-        if i%40 == 0 and epoch % 10:
-            input_ex = make_grid(input.detach().cpu(), normalize=True, nrow=8, padding=2).permute([1,2,0])
-            fig, ax = plt.subplots(1,1,figsize=(10,16))
-            ax.imshow(input_ex)
-            ax.set_title(f"Validation Batch Examples")
-            ax.axis('off')
-        
-            fig.savefig(os.path.join('./runs/',args.expname, f"AttentiveCutMix_ValidBatch_K{args.k}_E{epoch}_I{i}.png"))
-
         if i % args.print_freq == 0 and args.verbose == True:
             print('Test (on val set): [{0}/{1}][{2}/{3}]\t'
                   'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
@@ -489,43 +523,6 @@ def validate(val_loader, model, criterion, epoch):
     print('* Epoch: [{0}/{1}]\t Top 1-err {top1.avg:.3f}  Top 5-err {top5.avg:.3f}\t Test Loss {loss.avg:.3f}'.format(
         epoch, args.epochs, top1=top1, top5=top5, loss=losses))
     return top1.avg, top5.avg, losses.avg
-
-def generate_attentive_mask(attention_map, top_k):
-    """
-        Input:
-            attention_map   (Tensor) : NxWxH tensor after GAP.
-            top_k           (Tensor) : Number of candidates of the most intense points.
-        Output:
-            mask            (Tensor) : NxWxH tensor for masking attentive regions
-            coords          (Tensor) : Normalized coordinates(cx, cy) for masked regions
-    """
-    N, W, H = attention_map.shape
-    x = attention_map.reshape([N, W *H])
-
-    _, indices = torch.sort(x, descending=True, dim=1)
-
-    top_indices = indices[:, :top_k]
-
-    cell_width, cell_height = 1/W, 1/H
-
-    rows, cols = (top_indices//W)/N, (top_indices%W)/N
-    cx = cell_width/2 + rows*cell_width
-    cy = cell_height/2 + cols*cell_height
-    coords = torch.cat((cx, cy), dim=0).T
-
-    # print(cx, cy)
-    # print(coords)
-
-    mask = x.clone()
-
-    for i in range(N):
-        mask[i, top_indices[i]] = 0
-
-    mask = mask.reshape([N, W, H])
-    # print(mask)
-    mask[mask != 0] = 1
-
-    return mask, coords
 
 
 def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
