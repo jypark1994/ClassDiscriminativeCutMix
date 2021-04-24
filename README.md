@@ -16,7 +16,7 @@ This repository is a fork of original CutMix implementation from 'clovaai' (http
 
 
 
-### Usage Examples
+### Usage
 
 - train_cutout.py
 
@@ -47,10 +47,15 @@ python3 train_cutmix.py --device "3" --dataset cub200 --net_type resnet --epochs
 ```
 python3 train_attentive_cutmix.py --device "3" --cut_prob 0.5 --dataset cub200 --net_type resnet --epochs 90 --image_priority B --batch_size 32 --lr 1E-3 --wd 1e-4 --depth 50 --k 15 --expname  R50_AttentiveCutMix_P05_k15_1E-3_ModeB_cub200
 ```
+- train_multiscale_attentive_cutmix.py ----------> __Proposed!__ (Ongoing)
+    - Randomly select feature maps in stages.
+    - --cut_prob (float, [0, 1]) : Probability for applying Attentive CutMix on given mini-batch.
+    - --k (int) : Number of top-k highly activated pixels on the target feature map (Here, 4th block of ResNet50).
 
 - train_CD-CutMix.py   ----------->  __Proposed!__ (Ongoing)
     - --cut_prob (float, [0, 1]) : Probability for applying Attentive CutMix on given mini-batch.
     - --k (int) : Number of top-k highly activated pixels on the target feature map (Here, 4th block of ResNet50).
-    - --image_candidate
+    - --image_candidate : Strategy for target image selection
         - Mode A: Find the least likely image from the mini-batch with confidence consideration.
         - Mode B: Randomly samples 'Image B' without any confidence consideration.
+

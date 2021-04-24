@@ -283,7 +283,7 @@ def main():
         dict_activation['layer4'] = output.data
 
     for k, v in model.named_modules():
-        if 'layer4' in k:
+        if 'layer' in k:
             v.register_forward_hook(get_class_activation)
             print(f"Registered forward hook on \'{k}\'")
             break
@@ -357,9 +357,7 @@ def train(train_loader, model, criterion, optimizer, epoch):
 
         target = target.cuda()
 
-        r = 0
-        if args.cut_prob != 0:
-            r = np.random.rand(1)
+        r = np.random.rand(1)
 
         if r < args.cut_prob:
 
@@ -462,7 +460,7 @@ def train(train_loader, model, criterion, optimizer, epoch):
             occluded_batch = upsampled_attention_masks * input + (1 - upsampled_attention_masks) * input[rand_index]
             # Replace holes to images.
 
-            if i % 100 == 0 and epoch % 10 == 0:
+            if i % 100 == 0 and epoch % 20 == 0:
                 cam_grid = make_grid(occluded_batch.detach().cpu(), normalize=True, nrow=8).permute([1,2,0])
                 plt.imshow(cam_grid)
                 plt.title(f"Class Attentive CutMix Batch Sample at k={args.k}")
