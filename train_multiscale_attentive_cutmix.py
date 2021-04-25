@@ -314,12 +314,17 @@ def train(train_loader, model, criterion, optimizer, epoch):
 
     end = time.time()
     current_LR = get_learning_rate(optimizer)[0]
+
+    
+
     for i, (input, target) in enumerate(train_loader):
         # measure data loading time
         data_time.update(time.time() - end)
 
         input = input.cuda()
         target = target.cuda()
+        
+        target_stage_name = 'None'
 
         r = np.random.rand(1)
         if r < args.cut_prob:
@@ -354,9 +359,10 @@ def train(train_loader, model, criterion, optimizer, epoch):
             #   - Attentive CutMix(2020) uses highly activated top N patches from 7x7 grid map.
             #   - Generate Normalized BBox coordnates (x_min, y_min, x_max, y_max)
             
-            # ex) layer 4 = args.k, layer 3 = args.k*2, layer 2 = args.k*4, layer 4 = args.k*8
+            # ex) layer 4 = args.k, layer 3 = args.k*2^1, layer 2 = args.k*2^2, layer 4 = args.k*8
+            #             -> 1, 4, 16, 32,
             #             -> 4, 8, 16, 32
-            top_k_for_stage = args.k * (2**(len(stage_names) - target_stage_index))
+            top_k_for_stage = args.k * (4**(len(stage_names) - target_stage_index))
             # print(f"{target_stage_name}({target_stage_index}) : {top_k_for_stage.cpu().numpy()}")
             
             attention_masks, _ = generate_attentive_mask(target_fmap, top_k = top_k_for_stage) # Grid-based, Masking Top k patches
@@ -406,9 +412,9 @@ def train(train_loader, model, criterion, optimizer, epoch):
 
         if i%100 == 0 and epoch % 20 == 0:
             input_ex = make_grid(input.detach().cpu(), normalize=True, nrow=8, padding=2).permute([1,2,0])
-            fig, ax = plt.subplots(1,1,figsize=(10,16))
+            fig, ax = plt.subplots(1,1,figsize=(8,4))
             ax.imshow(input_ex)
-            ax.set_title(f"Training Batch Examples\nCut_Prob:{args.cut_prob}")
+            ax.set_title(f"Training Batch Examples\nCut_Prob:{args.cut_prob}, Cur_Target: {target_stage_name}, Num_occlusion: {n_occluded_pixels} ")
             ax.axis('off')
             fig.savefig(os.path.join('./runs/',args.expname, f"AttentiveCutMix_TrainBatch_K{args.k}_E{epoch}_I{i}.png"))
         

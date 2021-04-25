@@ -332,9 +332,7 @@ def train(train_loader, model, criterion, optimizer, epoch):
 
         r = np.random.rand(1)
         if r < args.cut_prob:
-                        # print("Generate Mask")
-            # print(f"Apply CutMix at r={r:.2f} < {args.cut_prob:.2f}")
-            # compute feature maps
+
             output = model(input)
 
             # TODO: Acquire activation maps from the random layers.
@@ -374,7 +372,7 @@ def train(train_loader, model, criterion, optimizer, epoch):
             # =====================================================
 
             # Generate class attentive masks using class activation maps.
-            top_k_for_stage = args.k * (2**(len(stage_names) - target_stage_index))
+            top_k_for_stage = args.k * (4**(len(stage_names) - target_stage_index))
             attention_masks, _ = generate_attentive_mask(class_activation_map, top_k = top_k_for_stage) # Grid-based, Masking Top k patches
 
             # In tech report, they tested top_k 1~15, and suggested 6 is proper.
@@ -425,7 +423,7 @@ def train(train_loader, model, criterion, optimizer, epoch):
             input_ex = make_grid(input.detach().cpu(), normalize=True, nrow=8, padding=2).permute([1,2,0])
             fig, ax = plt.subplots(1,1,figsize=(10,16))
             ax.imshow(input_ex)
-            ax.set_title(f"Training Batch Examples\nCut_Prob:{args.cut_prob}")
+            ax.set_title(f"Training Batch Examples\nCut_Prob:{args.cut_prob}, Cur_Target: {target_stage_name}, Num_occlusion: {n_occluded_pixels} ")
             ax.axis('off')
             fig.savefig(os.path.join('./runs/',args.expname, f"AttentiveCutMix_TrainBatch_K{args.k}_E{epoch}_I{i}.png"))
         
