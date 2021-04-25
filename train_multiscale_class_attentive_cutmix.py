@@ -77,12 +77,20 @@ parser.set_defaults(verbose=True)
 # args.dataset = args.dataset.lower()
 
 dict_activation = {}
-hook_handles = []
+dict_gradients = {}
+forward_hook_handles = []
+backward_hook_handles = []
 
 def forward_hook_function(name): # Hook function for the forward pass.
     def get_class_activation(module, input, output):
         dict_activation[name] = output.data
     return get_class_activation
+
+def backward_hook_function(name): # Hook function for the forward pass.
+    def get_class_gradient(module, input, output):
+        dict_gradients[name] = output
+    return get_class_gradient
+
 
 best_err1 = 100
 best_err5 = 100
@@ -252,8 +260,9 @@ def main():
     for L in stage_names:
         for k, v in model.named_modules():
             if L in k:
-                hook_handles.append(v.register_forward_hook(forward_hook_function(L)))
-                print(f"Registered forward hook on \'{k}\'")
+                forward_hook_handles.append(v.register_forward_hook(forward_hook_function(L)))
+                backward_hook_handles.append(v.register_backward_hook(backward_hook_function(L)))
+                print(f"Registered forward/backward hook on \'{k}\'")
                 break
 
     # define loss function (criterion) and optimizer
@@ -332,12 +341,27 @@ def train(train_loader, model, criterion, optimizer, epoch):
             target_stage_index = torch.randint(low=0, high=len(stage_names), size=(1,))[0] # Sample random integer as target stage index
             target_stage_name = stage_names[target_stage_index]
 
-            target_fmap = dict_activation[target_stage_name].mean(dim=1) # Shape: [N x W_f x H_f]
+            # Acquire loss and calculate gradients for generating Class Activation Maps.
+            loss = criterion(output, target)
+            loss.backward()
+
+            # Get feature and gradient maps
+            target_fmap = dict_activation[target_stage_name] # Shape: [N x C x W_f x H_f]
+            target_gradients = dict_gradients[target_stage_name][0]
 
             for k, v in dict_activation.items():
-                v = None # Initialize activation hook for preventing memory leak
+                v = None # Initialize activation dict for preventing memory leak
 
-            N, W_f, H_f = target_fmap.shape
+            for k, v in dict_gradients.items():
+                v = None # Initialize gradient dict for preventing memory leak
+
+            N, C, W_f, H_f = target_fmap.shape
+            
+            # Acquire importance weights by applying GAP on target gradient map.
+            importance_weights = F.adaptive_avg_pool2d(target_gradients, 1) # [N x C x 1 x 1]
+
+            class_activation_map = torch.mul(target_fmap, importance_weights).sum(dim=1, keepdim=True) # [N x 1 x W_f x H_f]
+            class_activation_map = F.relu(class_activation_map).squeeze(dim=1) # [N x W_f x H_f]
 
             # Visualizing Activation Map
             # ========== Uncomment to put visualization =========== 
@@ -349,17 +373,10 @@ def train(train_loader, model, criterion, optimizer, epoch):
             # exit()
             # =====================================================
 
-            # Acquire Highly Activated Region Informations (Grid based)
-            #   - Consideration: Allow or not to select multiple patches ... (grid-based?, contour detection?)
-            #   - Attentive CutMix(2020) uses highly activated top N patches from 7x7 grid map.
-            #   - Generate Normalized BBox coordnates (x_min, y_min, x_max, y_max)
-            
-            # ex) layer 4 = args.k, layer 3 = args.k*2, layer 2 = args.k*4, layer 4 = args.k*8
-            #             -> 4, 8, 16, 32
+            # Generate class attentive masks using class activation maps.
             top_k_for_stage = args.k * (2**(len(stage_names) - target_stage_index))
-            # print(f"{target_stage_name}({target_stage_index}) : {top_k_for_stage.cpu().numpy()}")
-            
-            attention_masks, _ = generate_attentive_mask(target_fmap, top_k = top_k_for_stage) # Grid-based, Masking Top k patches
+            attention_masks, _ = generate_attentive_mask(class_activation_map, top_k = top_k_for_stage) # Grid-based, Masking Top k patches
+
             # In tech report, they tested top_k 1~15, and suggested 6 is proper.
             # attention_masks: [N, W_f, H_f]
             # coords: [[cx_1, cy_1] ... [cx_k, cy_k]]
@@ -369,7 +386,7 @@ def train(train_loader, model, criterion, optimizer, epoch):
                 size=input.shape[-2:], mode='nearest') # [N, W_f, H_f] -> [N, 1, W_f, H_f] -> [N, 3, W_f, H_f] -> [N, C, W, H]
             # print(upsampled_attention_masks.shape)
 
-            n_occluded_pixels = top_k_for_stage # Important regions are occluded. (Replaced)
+            n_occluded_pixels = args.k # Important regions are occluded. (Replaced)
             n_total_pixels = W_f * H_f # Area of target class activation map
 
             rand_index = torch.randperm(input.size()[0]).cuda() # Randomly select image sample to pasted from the batch
@@ -404,7 +421,7 @@ def train(train_loader, model, criterion, optimizer, epoch):
 
             loss = criterion(output, target)
 
-        if i%100 == 0 and epoch % 20 == 0:
+        if i%100 == 0 and epoch % 10 == 0:
             input_ex = make_grid(input.detach().cpu(), normalize=True, nrow=8, padding=2).permute([1,2,0])
             fig, ax = plt.subplots(1,1,figsize=(10,16))
             ax.imshow(input_ex)
@@ -493,7 +510,7 @@ def validate(val_loader, model, criterion, epoch):
         batch_time.update(time.time() - end)
         end = time.time()
 
-        if i%100 == 0 and epoch % 20 == 0:
+        if i%100 == 0 and epoch % 10 == 0:
             input_ex = make_grid(input.detach().cpu(), normalize=True, nrow=8, padding=2).permute([1,2,0])
             fig, ax = plt.subplots(1,1,figsize=(10,16))
             ax.imshow(input_ex)
