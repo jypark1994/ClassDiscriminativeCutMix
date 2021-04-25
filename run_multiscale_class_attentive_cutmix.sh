@@ -1,3 +1,14 @@
+echo "Multiscale Class Attentive cutmix P=0.9 (1)"
+
+python3 train_multiscale_class_attentive_cutmix.py --image_priority A --device "0" --cut_prob 0.9 --dataset cub200 --net_type resnet --epochs 90 --batch_size 32 --lr 1e-3 --wd 1e-4 --depth 50 --k 1 --expname R50_MS_Class_Attentivecutmix_k1_1e-3_P09_cub200 > R50_MS_Class_Attentivecutmix_k1_1e-3_P09_cub200.txt \
+|
+python3 train_multiscale_class_attentive_cutmix.py --image_priority A --device "1" --cut_prob 0.9 --dataset cub200 --net_type resnet --epochs 90 --batch_size 32 --lr 1e-3 --wd 1e-4 --depth 50 --k 3 --expname R50_MS_Class_Attentivecutmix_k3_1e-3_P09_cub200 > R50_MS_Class_Attentivecutmix_k3_1e-3_P09_cub200.txt \
+|
+python3 train_multiscale_class_attentive_cutmix.py --image_priority A --device "2" --cut_prob 0.9 --dataset cub200 --net_type resnet --epochs 90 --batch_size 32 --lr 1e-3 --wd 1e-4 --depth 50 --k 6 --expname R50_MS_Class_Attentivecutmix_k6_1e-3_P09_cub200 > R50_MS_Class_Attentivecutmix_k6_1e-3_P09_cub200.txt \
+|
+python3 train_multiscale_class_attentive_cutmix.py --image_priority A --device "3" --cut_prob 0.9 --dataset cub200 --net_type resnet --epochs 90 --batch_size 32 --lr 1e-3 --wd 1e-4 --depth 50 --k 9 --expname R50_MS_Class_Attentivecutmix_k9_1e-3_P09_cub200 > R50_MS_Class_Attentivecutmix_k9_1e-3_P09_cub200.txt;
+
+
 echo "Multiscale Class Attentive cutmix P=0.1 (1)"
 
 python3 train_multiscale_class_attentive_cutmix.py --image_priority A --device "0" --cut_prob 0.1 --dataset cub200 --net_type resnet --epochs 90 --batch_size 32 --lr 1e-3 --wd 1e-4 --depth 50 --k 1 --expname R50_MS_Class_Attentivecutmix_k1_1e-3_P01_cub200 > R50_MS_Class_Attentivecutmix_k1_1e-3_P01_cub200.txt \
@@ -69,16 +80,5 @@ python3 train_multiscale_class_attentive_cutmix.py --image_priority A --device "
 python3 train_multiscale_class_attentive_cutmix.py --image_priority A --device "2" --cut_prob 0.9 --dataset cub200 --net_type resnet --epochs 90 --batch_size 32 --lr 1e-3 --wd 1e-4 --depth 50 --k 12 --expname  R50_MS_Class_Attentivecutmix_k12_1e-3_P09_cub200 > R50_MS_Class_Attentivecutmix_k12_1e-3_P09_cub200.txt \
 |
 python3 train_multiscale_class_attentive_cutmix.py --image_priority A --device "3" --cut_prob 0.9 --dataset cub200 --net_type resnet --epochs 90 --batch_size 32 --lr 1e-3 --wd 1e-4 --depth 50 --k 15 --expname  R50_MS_Class_Attentivecutmix_k15_1e-3_P09_cub200 > R50_MS_Class_Attentivecutmix_k15_1e-3_P09_cub200.txt;
-
-
-echo "Multiscale Class Attentive cutmix P=0.9 (1)"
-
-python3 train_multiscale_class_attentive_cutmix.py --image_priority A --device "0" --cut_prob 0.9 --dataset cub200 --net_type resnet --epochs 90 --batch_size 32 --lr 1e-3 --wd 1e-4 --depth 50 --k 1 --expname R50_MS_Class_Attentivecutmix_k1_1e-3_P09_cub200 > R50_MS_Class_Attentivecutmix_k1_1e-3_P09_cub200.txt \
-|
-python3 train_multiscale_class_attentive_cutmix.py --image_priority A --device "1" --cut_prob 0.9 --dataset cub200 --net_type resnet --epochs 90 --batch_size 32 --lr 1e-3 --wd 1e-4 --depth 50 --k 3 --expname R50_MS_Class_Attentivecutmix_k3_1e-3_P09_cub200 > R50_MS_Class_Attentivecutmix_k3_1e-3_P09_cub200.txt \
-|
-python3 train_multiscale_class_attentive_cutmix.py --image_priority A --device "2" --cut_prob 0.9 --dataset cub200 --net_type resnet --epochs 90 --batch_size 32 --lr 1e-3 --wd 1e-4 --depth 50 --k 6 --expname R50_MS_Class_Attentivecutmix_k6_1e-3_P09_cub200 > R50_MS_Class_Attentivecutmix_k6_1e-3_P09_cub200.txt \
-|
-python3 train_multiscale_class_attentive_cutmix.py --image_priority A --device "3" --cut_prob 0.9 --dataset cub200 --net_type resnet --epochs 90 --batch_size 32 --lr 1e-3 --wd 1e-4 --depth 50 --k 9 --expname R50_MS_Class_Attentivecutmix_k9_1e-3_P09_cub200 > R50_MS_Class_Attentivecutmix_k9_1e-3_P09_cub200.txt;
 
 

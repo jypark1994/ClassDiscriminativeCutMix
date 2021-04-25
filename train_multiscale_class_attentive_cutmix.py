@@ -333,7 +333,7 @@ def train(train_loader, model, criterion, optimizer, epoch):
         r = np.random.rand(1)
 
         target_stage_name = 'None'
-        n_occluded_pixels = 0
+        top_k_for_stage = 0
         if r < args.cut_prob:
 
             output = model(input)
@@ -375,10 +375,10 @@ def train(train_loader, model, criterion, optimizer, epoch):
             # =====================================================
 
             # Generate class attentive masks using class activation maps.
-            top_k_for_stage = args.k * (4**(len(stage_names) - target_stage_index))
-            attention_masks, _ = generate_attentive_mask(class_activation_map, top_k = top_k_for_stage) # Grid-based, Masking Top k patches
+            top_k_for_stage = args.k * (4**(len(stage_names) - target_stage_index - 1))
+            # print(top_k_for_stage)
+            attention_masks = generate_attentive_mask(class_activation_map, top_k = top_k_for_stage) # Grid-based, Masking Top k patches
 
-            # In tech report, they tested top_k 1~15, and suggested 6 is proper.
             # attention_masks: [N, W_f, H_f]
             # coords: [[cx_1, cy_1] ... [cx_k, cy_k]]
             # print(attention_masks.shape)
@@ -422,11 +422,11 @@ def train(train_loader, model, criterion, optimizer, epoch):
 
             loss = criterion(output, target)
 
-        if i%100 == 0 and epoch % 10 == 0:
+        if i%25 == 0 and epoch % 30 == 0:
             input_ex = make_grid(input.detach().cpu(), normalize=True, nrow=8, padding=2).permute([1,2,0])
             fig, ax = plt.subplots(1,1,figsize=(16,8))
             ax.imshow(input_ex)
-            ax.set_title(f"Training Batch Examples\nCut_Prob:{args.cut_prob}, Cur_Target: {target_stage_name}, Num_occlusion: {n_occluded_pixels} ")
+            ax.set_title(f"Training Batch Examples\nCut_Prob:{args.cut_prob}, Cur_Target: {target_stage_name}, Num_occlusion: {top_k_for_stage} ")
             ax.axis('off')
             fig.savefig(os.path.join('./runs/',args.expname, f"AttentiveCutMix_TrainBatch_K{args.k}_E{epoch}_I{i}.png"))
         
@@ -546,29 +546,17 @@ def generate_attentive_mask(attention_map, top_k):
     x = attention_map.reshape([N, W *H])
 
     _, indices = torch.sort(x, descending=True, dim=1)
+    top_indices = indices[:, :top_k] # [N, Top_k]
 
-    top_indices = indices[:, :top_k]
-
-    cell_width, cell_height = 1/W, 1/H
-
-    rows, cols = (top_indices//W)/N, (top_indices%W)/N
-    cx = cell_width/2 + rows*cell_width
-    cy = cell_height/2 + cols*cell_height
-    coords = torch.cat((cx, cy), dim=0).T
-
-    # print(cx, cy)
-    # print(coords)
-
-    mask = x.clone()
+    mask = torch.ones_like(x)
 
     for i in range(N):
         mask[i, top_indices[i]] = 0
-
+    
     mask = mask.reshape([N, W, H])
     # print(mask)
-    mask[mask != 0] = 1
 
-    return mask, coords
+    return mask
 
 
 def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):

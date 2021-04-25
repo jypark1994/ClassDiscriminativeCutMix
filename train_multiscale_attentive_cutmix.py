@@ -365,7 +365,7 @@ def train(train_loader, model, criterion, optimizer, epoch):
             top_k_for_stage = args.k * (4**(len(stage_names) - target_stage_index))
             # print(f"{target_stage_name}({target_stage_index}) : {top_k_for_stage.cpu().numpy()}")
             
-            attention_masks, _ = generate_attentive_mask(target_fmap, top_k = top_k_for_stage) # Grid-based, Masking Top k patches
+            attention_masks = generate_attentive_mask(target_fmap, top_k = top_k_for_stage) # Grid-based, Masking Top k patches
             # In tech report, they tested top_k 1~15, and suggested 6 is proper.
             # attention_masks: [N, W_f, H_f]
             # coords: [[cx_1, cy_1] ... [cx_k, cy_k]]
@@ -534,29 +534,17 @@ def generate_attentive_mask(attention_map, top_k):
     x = attention_map.reshape([N, W *H])
 
     _, indices = torch.sort(x, descending=True, dim=1)
+    top_indices = indices[:, :top_k] # [N, Top_k]
 
-    top_indices = indices[:, :top_k]
-
-    cell_width, cell_height = 1/W, 1/H
-
-    rows, cols = (top_indices//W)/N, (top_indices%W)/N
-    cx = cell_width/2 + rows*cell_width
-    cy = cell_height/2 + cols*cell_height
-    coords = torch.cat((cx, cy), dim=0).T
-
-    # print(cx, cy)
-    # print(coords)
-
-    mask = x.clone()
+    mask = torch.ones_like(x)
 
     for i in range(N):
         mask[i, top_indices[i]] = 0
-
+    
     mask = mask.reshape([N, W, H])
     # print(mask)
-    mask[mask != 0] = 1
 
-    return mask, coords
+    return mask
 
 
 def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
