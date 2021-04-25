@@ -331,6 +331,9 @@ def train(train_loader, model, criterion, optimizer, epoch):
         target = target.cuda()
 
         r = np.random.rand(1)
+
+        target_stage_name = 'None'
+        n_occluded_pixels = 0
         if r < args.cut_prob:
 
             output = model(input)
@@ -384,7 +387,7 @@ def train(train_loader, model, criterion, optimizer, epoch):
                 size=input.shape[-2:], mode='nearest') # [N, W_f, H_f] -> [N, 1, W_f, H_f] -> [N, 3, W_f, H_f] -> [N, C, W, H]
             # print(upsampled_attention_masks.shape)
 
-            n_occluded_pixels = args.k # Important regions are occluded. (Replaced)
+            n_occluded_pixels = top_k_for_stage # Important regions are occluded. (Replaced)
             n_total_pixels = W_f * H_f # Area of target class activation map
 
             rand_index = torch.randperm(input.size()[0]).cuda() # Randomly select image sample to pasted from the batch
@@ -421,7 +424,7 @@ def train(train_loader, model, criterion, optimizer, epoch):
 
         if i%100 == 0 and epoch % 10 == 0:
             input_ex = make_grid(input.detach().cpu(), normalize=True, nrow=8, padding=2).permute([1,2,0])
-            fig, ax = plt.subplots(1,1,figsize=(10,16))
+            fig, ax = plt.subplots(1,1,figsize=(16,8))
             ax.imshow(input_ex)
             ax.set_title(f"Training Batch Examples\nCut_Prob:{args.cut_prob}, Cur_Target: {target_stage_name}, Num_occlusion: {n_occluded_pixels} ")
             ax.axis('off')
