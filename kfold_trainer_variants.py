@@ -260,7 +260,7 @@ def train_k_fold_MCACM(model, train_loader, optimizer, scheduler, criterion, num
                         N, C, W_f, H_f = target_fmap.shape
 
                         importance_weights = F.adaptive_avg_pool2d(target_gradients, 1) # [N x C x 1 x 1]
-                        
+
                         class_activation_map = torch.mul(target_fmap, importance_weights).sum(dim=1, keepdim=True) # [N x 1 x W_f x H_f]
                         class_activation_map = F.relu(class_activation_map).squeeze(dim=1) # [N x W_f x H_f]
 
@@ -299,20 +299,19 @@ def train_k_fold_MCACM(model, train_loader, optimizer, scheduler, criterion, num
 
                     else:
 
-                        optimizer.zero_grad()
-
                         pred = model(batch)
                         pred_max = torch.argmax(pred, 1)
 
                         loss = criterion(pred, labels)
 
-                    if idx%100 == 0 and cur_epoch % 10 == 0:
+                    if idx % 10 == 0 and cur_epoch % 1 == 0 and cur_val_fold == 0:
                         input_ex = make_grid(batch.detach().cpu(), normalize=True, nrow=8, padding=2).permute([1,2,0])
                         fig, ax = plt.subplots(1,1,figsize=(8,4))
                         ax.imshow(input_ex)
                         ax.set_title(f"Train Batch Examples\nMultiscale Class Activation CutMix\nCur_Target: {target_stage_name}, Num_occlusion: {top_k_for_stage} ")
                         ax.axis('off')
-                        fig.savefig(os.path.join(save_path, f"AttentiveCutMix_TrainBatch_K{k}_E{cur_epoch}_I{idx}.png"))
+                        fig.savefig(os.path.join(save_path, f"K{k}_E{cur_epoch}_I{idx}.png"))
+                        del fig, ax
 
                     fold_train_loss += loss
                     fold_train_n_samples += labels.size(0)
@@ -346,13 +345,14 @@ def train_k_fold_MCACM(model, train_loader, optimizer, scheduler, criterion, num
                 fold_valid_n_samples += labels.size(0)
                 fold_valid_n_corrects += torch.sum(pred_max == labels)
 
-                if idx%100 == 0 and cur_epoch % 10 == 0:
+                if idx % 10 == 0 and cur_epoch % 1 == 0 and cur_val_fold == 0:
                     input_ex = make_grid(batch.detach().cpu(), normalize=True, nrow=8, padding=2).permute([1,2,0])
                     fig, ax = plt.subplots(1,1,figsize=(8,4))
                     ax.imshow(input_ex)
                     ax.set_title(f"Validation Batch Examples\nMultiscale Class Activation CutMix\nCur_Target: {target_stage_name}, Num_occlusion: {top_k_for_stage} ")
                     ax.axis('off')
                     fig.savefig(os.path.join(save_path, f"AttentiveCutMix_ValidBatch_K{k}_E{cur_epoch}_I{idx}.png"))
+                    del fig, ax
 
         fold_train_loss /= fold_train_n_samples
         fold_train_acc = fold_train_n_corrects / fold_train_n_samples                
