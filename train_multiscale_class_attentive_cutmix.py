@@ -66,7 +66,8 @@ parser.add_argument('--device', default='0', type=str,
                     help='Target GPU for computation')
 parser.add_argument('--pretrained', default='./pretrained/R50_ImageNet_Baseline.pth', type=str,
                     help='Pretrained *.pth path')
-
+parser.add_argument('--target_mode', default="label", type=str, help='Targeting mode for \'label\' or \'likely\' class')
+parser.add_argument('--im_size', default=224, type=int, help='Size of input image. default=224 (224x224)')
 parser.add_argument('--k', default=3, type=int, help='Number of most activated patches on the final layer.')
 parser.add_argument('--cut_prob', default=0, type=float, help='Attentive CutMix probability')
 parser.add_argument('--image_priority', default='A', type=str, help='Which image will be filled on the top K regions?')
@@ -143,7 +144,7 @@ def main():
         init_scale = 1.15
         transforms_train = transforms.Compose([
             transforms.ColorJitter(brightness=0.1,contrast=0.2,saturation=0.2,hue=0.1),
-            transforms.RandomAffine(360,scale=[init_scale-0.15, init_scale+0.4]),
+            transforms.RandomAffine(360,scale=[init_scale-0.15, init_scale+0.15]),
             transforms.CenterCrop(224),
             transforms.ToTensor(),
             # transforms.Normalize(mean=[0.816, 0.744, 0.721],std=[0.146, 0.134, 0.121]),
@@ -164,15 +165,15 @@ def main():
     elif args.dataset == 'cub200':
         numberofclass = 200
         train_transforms = transforms.Compose([
-                transforms.Resize(224),
+                transforms.Resize(args.im_size),
                 transforms.RandomHorizontalFlip(),
-                transforms.CenterCrop(224),
+                transforms.CenterCrop(args.im_size),
                 transforms.ToTensor(),
                 transforms.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225))
         ])
         val_transforms = transforms.Compose([
-                transforms.Resize(224),
-                transforms.CenterCrop(224),
+                transforms.Resize(args.im_size),
+                transforms.CenterCrop(args.im_size),
                 transforms.ToTensor(),
                 transforms.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225))
         ])
@@ -240,7 +241,7 @@ def main():
     model = torch.nn.DataParallel(model).cuda()
     print('the number of model parameters: {}'.format(sum([p.data.nelement() for p in model.parameters()])))
 
-    if args.pretrained != None:
+    if args.pretrained != '':
         pretrained_dict = torch.load(args.pretrained)['state_dict']
         new_model_dict = model.state_dict()
 
@@ -343,7 +344,19 @@ def train(train_loader, model, criterion, optimizer, epoch):
             target_stage_name = stage_names[target_stage_index]
 
             # Acquire loss and calculate gradients for generating Class Activation Maps.
-            loss = criterion(output, target)
+           
+            if args.target_mode == 'label':
+                # Mode 1 : Using target(Label) loss for generating CAMs
+                loss = criterion(output, target)
+            
+            elif args.target_mode == 'likely':
+                # Mode 2 : Using "Most Likely Class" loss for generating CAMs
+                most_confident_target = output.argmax(dim=1)
+                loss = criterion(output, most_confident_target)
+            else:
+                assert "Target mode is not specified. (Use \'label\' or \'likely\')"
+
+
             loss.backward()
 
             # Get feature and gradient maps
@@ -422,9 +435,9 @@ def train(train_loader, model, criterion, optimizer, epoch):
 
             loss = criterion(output, target)
 
-        if i%25 == 0 and epoch % 30 == 0:
+        if i%100 == 0 and epoch % 20 == 0:
             input_ex = make_grid(input.detach().cpu(), normalize=True, nrow=8, padding=2).permute([1,2,0])
-            fig, ax = plt.subplots(1,1,figsize=(16,8))
+            fig, ax = plt.subplots(1,1,figsize=(8,4))
             ax.imshow(input_ex)
             ax.set_title(f"Training Batch Examples\nCut_Prob:{args.cut_prob}, Cur_Target: {target_stage_name}, Num_occlusion: {top_k_for_stage} ")
             ax.axis('off')
@@ -511,9 +524,9 @@ def validate(val_loader, model, criterion, epoch):
         batch_time.update(time.time() - end)
         end = time.time()
 
-        if i%100 == 0 and epoch % 10 == 0:
+        if i%100 == 0 and epoch % 20 == 0:
             input_ex = make_grid(input.detach().cpu(), normalize=True, nrow=8, padding=2).permute([1,2,0])
-            fig, ax = plt.subplots(1,1,figsize=(10,16))
+            fig, ax = plt.subplots(1,1,figsize=(8,4))
             ax.imshow(input_ex)
             ax.set_title(f"Validation Batch Examples")
             ax.axis('off')

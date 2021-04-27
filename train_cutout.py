@@ -71,7 +71,7 @@ parser.add_argument('--device', default='0', type=str,
 parser.add_argument('--pretrained', default='./pretrained/R50_ImageNet_Baseline.pth', type=str,
                     help='Pretrained *.pth path')
 
-
+parser.add_argument('--im_size', default=224, type=int, help='Size of input image. default=224 (224x224)')
 parser.set_defaults(bottleneck=True)
 parser.set_defaults(verbose=True)
 
@@ -130,9 +130,8 @@ def main():
 
         transforms_train = transforms.Compose([
             transforms.ColorJitter(brightness=0.1,contrast=0.2,saturation=0.2,hue=0.1),
-            transforms.RandomAffine(360,scale=[init_scale-0.15,init_scale+0.4]),
-            transforms.Resize(224),
-            transforms.RandomCrop(224), 
+            transforms.RandomAffine(360,scale=[init_scale-0.15,init_scale+0.15]),
+            transforms.CenterCrop(224), 
             # In 2020, we used center cropping for MosquitoDL, but we replaced to random cropping to prevent further overfitting.
             transforms.ToTensor(),
             Cutout(n_holes=args.n_holes, length=args.length),
@@ -233,7 +232,7 @@ def main():
     model = torch.nn.DataParallel(model).cuda()
     print('the number of model parameters: {}'.format(sum([p.data.nelement() for p in model.parameters()])))
 
-    if args.pretrained != None:
+    if args.pretrained != '':
         pretrained_dict = torch.load(args.pretrained)['state_dict']
         new_model_dict = model.state_dict()
 
@@ -385,7 +384,7 @@ def validate(val_loader, model, criterion, epoch):
 
         if i%40 == 0 and epoch == 0:
             input_ex = make_grid(input.detach().cpu(), normalize=True, nrow=8, padding=2).permute([1,2,0])
-            fig, ax = plt.subplots(1,1,figsize=(10,16))
+            fig, ax = plt.subplots(1,1,figsize=(8,4))
             ax.imshow(input_ex)
             ax.set_title(f"Validation Batch Examples")
             ax.axis('off')

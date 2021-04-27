@@ -119,6 +119,7 @@ class ResNet(nn.Module):
             self.layer4 = self._make_layer(blocks[depth], 512, layers[depth][3], stride=2)
             self.avgpool = nn.AvgPool2d(7) 
             self.fc = nn.Linear(512 * blocks[depth].expansion, num_classes)
+            # self.fc = nn.Linear(2048 * blocks[depth].expansion, num_classes) # for sz=448
 
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
@@ -157,6 +158,7 @@ class ResNet(nn.Module):
 
             x = self.avgpool(x)
             x = x.view(x.size(0), -1)
+            
             x = self.fc(x)
 
         elif self.dataset == 'imagenet' or self.dataset == 'mosquitodl' or self.dataset == 'cub200':
@@ -172,6 +174,8 @@ class ResNet(nn.Module):
 
             x = self.avgpool(x)
             x = x.view(x.size(0), -1)
+            # print(x.shape)
+            # print(self.fc.in_features, self.fc.out_features)
             x = self.fc(x)
     
         return x

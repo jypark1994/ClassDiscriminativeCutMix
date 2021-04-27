@@ -3,7 +3,6 @@
 import argparse
 import os
 import shutil
-import random
 import time
 
 import torch
@@ -34,7 +33,7 @@ model_names = sorted(name for name in models.__dict__
                      if name.islower() and not name.startswith("__")
                      and callable(models.__dict__[name]))
 
-parser = argparse.ArgumentParser(description='Cutmix PyTorch CIFAR-10, CIFAR-100 and ImageNet-1k Training')
+parser = argparse.ArgumentParser(description='Attentive Cutmix PyTorch CIFAR-10, CIFAR-100 and ImageNet-1k Training')
 parser.add_argument('--net_type', default='pyramidnet', type=str,
                     help='networktype: resnet, and pyamidnet')
 parser.add_argument('-j', '--workers', default=4, type=int, metavar='N',
@@ -63,62 +62,47 @@ parser.add_argument('--alpha', default=300, type=float,
                     help='number of new channel increases per depth (default: 300)')
 parser.add_argument('--expname', default='TEST', type=str,
                     help='name of experiment')
-parser.add_argument('--beta', default=1, type=float,
-                    help='hyperparameter beta')
-parser.add_argument('--cutmix_prob', default=0, type=float,
-                    help='cutmix probability')
 parser.add_argument('--device', default='0', type=str,
                     help='Target GPU for computation')
-parser.add_argument('--pretrained', default='./pretrained/R50_Baseline.tar', type=str,
+parser.add_argument('--pretrained', default='./pretrained/R50_ImageNet_Baseline.pth', type=str,
                     help='Pretrained *.pth path')
 
+parser.add_argument('--im_size', default=224, type=int, help='Size of input image. default=224 (224x224)')
+parser.add_argument('--k', default=3, type=int, help='Number of most activated patches on the final layer.')
+parser.add_argument('--cut_prob', default=0, type=float, help='Attentive CutMix probability')
+parser.add_argument('--image_priority', default='A', type=str, help='Which image will be filled on the top K regions?')
 
 parser.set_defaults(bottleneck=True)
 parser.set_defaults(verbose=True)
 
+# args.dataset = args.dataset.lower()
+
+dict_activation = {}
+dict_gradients = {}
+forward_hook_handles = []
+backward_hook_handles = []
+
+def forward_hook_function(name): # Hook function for the forward pass.
+    def get_class_activation(module, input, output):
+        dict_activation[name] = output.data
+    return get_class_activation
+
+def backward_hook_function(name): # Hook function for the forward pass.
+    def get_class_gradient(module, input, output):
+        dict_gradients[name] = output
+    return get_class_gradient
+
+
 best_err1 = 100
 best_err5 = 100
 
-def generate_attentive_mask(attention_map, top_k):
-    """
-        Input:
-            attention_map   (Tensor) : NxWxH tensor after GAP.
-            top_k           (Tensor) : Number of candidates of the most intense points.
-        Output:
-            mask            (Tensor) : NxWxH tensor for masking attentive regions
-            coords          (Tensor) : Normalized coordinates(cx, cy) for masked regions
-    """
-    N, W, H = attention_map.shape
-    x = attention_map.reshape([N, W *H])
-
-    _, indices = torch.sort(x, descending=True, dim=1)
-
-    top_indices = indices[:, :top_k]
-
-    cell_width, cell_height = 1/W, 1/H
-
-    rows, cols = (top_indices//W)/N, (top_indices%W)/N
-    cx = cell_width/2 + rows*cell_width
-    cy = cell_height/2 + cols*cell_height
-    coords = torch.cat((cx, cy), dim=0).T
-
-    print(cx, cy)
-    print(coords)
-
-    mask = x.clone()
-
-    for i in range(N):
-        mask[i, top_indices[i]] = 0
-
-    mask = mask.reshape([N, W, H])
-    # print(mask)
-    mask[mask != 0] = 1
-
-    return mask, coords
-
 def main():
-    global args, best_err1, best_err5
+    global args, best_err1, best_err5, stage_names
     args = parser.parse_args()
+
+    directory = "runs/%s/" % (args.expname)
+    if not os.path.exists(directory):
+        os.makedirs(directory, exist_ok=True)
 
     os.environ['CUDA_VISIBLE_DEVICES'] = args.device
 
@@ -157,17 +141,16 @@ def main():
         else:
             raise Exception('unknown dataset: {}'.format(args.dataset))
     elif args.dataset == 'mosquitodl':
+        init_scale = 1.15
         transforms_train = transforms.Compose([
             transforms.ColorJitter(brightness=0.1,contrast=0.2,saturation=0.2,hue=0.1),
-            transforms.RandomAffine(360,scale=[1.55, 1.9]),
-            transforms.Resize(224),
+            transforms.RandomAffine(360,scale=[init_scale-0.15, init_scale+0.4]),
             transforms.CenterCrop(224),
             transforms.ToTensor(),
             # transforms.Normalize(mean=[0.816, 0.744, 0.721],std=[0.146, 0.134, 0.121]),
         ])
 
         transforms_test = transforms.Compose([
-            transforms.Resize(224),
             transforms.CenterCrop(224),
             transforms.ToTensor(),
         ])
@@ -182,15 +165,15 @@ def main():
     elif args.dataset == 'cub200':
         numberofclass = 200
         train_transforms = transforms.Compose([
-                transforms.Resize(224),
+                transforms.Resize(args.im_size),
                 transforms.RandomHorizontalFlip(),
-                transforms.CenterCrop(224),
+                transforms.CenterCrop(args.im_size),
                 transforms.ToTensor(),
                 transforms.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225))
         ])
         val_transforms = transforms.Compose([
-                transforms.Resize(224),
-                transforms.CenterCrop(224),
+                transforms.Resize(args.im_size),
+                transforms.CenterCrop(args.im_size),
                 transforms.ToTensor(),
                 transforms.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225))
         ])
@@ -258,21 +241,30 @@ def main():
     model = torch.nn.DataParallel(model).cuda()
     print('the number of model parameters: {}'.format(sum([p.data.nelement() for p in model.parameters()])))
 
-    pretrained_dict = torch.load(args.pretrained)['state_dict']
-    new_model_dict = model.state_dict()
+    if args.pretrained != None:
+        pretrained_dict = torch.load(args.pretrained)['state_dict']
+        new_model_dict = model.state_dict()
 
-    for k, v in new_model_dict.items():
-        if 'fc' in k:
-            continue
-        else:
-            new_model_dict[k] = v
+        for k, v in new_model_dict.items():
+            if 'fc' in k:
+                continue
+            else:
+                new_model_dict[k] = pretrained_dict[k]
+        
+        
+        model.load_state_dict(new_model_dict)
 
-    model.load_state_dict(new_model_dict)
 
-    def get_class_activation(module, input, output):
-        activation[module] = output.data
+    if args.net_type == 'resnet':
+        stage_names = ["layer1", "layer2", "layer3","layer4"]
 
-    model._modules.get('layer4').register_forward_hook(get_class_activation)
+    for L in stage_names:
+        for k, v in model.named_modules():
+            if L in k:
+                forward_hook_handles.append(v.register_forward_hook(forward_hook_function(L)))
+                backward_hook_handles.append(v.register_backward_hook(backward_hook_function(L)))
+                print(f"Registered forward/backward hook on \'{k}\'")
+                break
 
     # define loss function (criterion) and optimizer
     criterion = nn.CrossEntropyLoss().cuda()
@@ -283,10 +275,12 @@ def main():
 
     cudnn.benchmark = True
 
+    epoch_t_end = 0
+
     for epoch in range(0, args.epochs):
 
         adjust_learning_rate(optimizer, epoch)
-
+        epoch_t_start = time.time()
         # train for one epoch
         train_loss = train(train_loader, model, criterion, optimizer, epoch)
 
@@ -309,11 +303,134 @@ def main():
             'optimizer': optimizer.state_dict(),
         }, is_best)
 
+        epoch_t_end = time.time() - epoch_t_start
+        print(f'- Epoch time: {epoch_t_end:.4f}[sec]')
+        print(f'- Estimated time left: {epoch_t_end*(args.epochs - epoch):.4f}[sec]')
+        print('-'*30)
+
     print('Best accuracy (top-1 and 5 error):', best_err1, best_err5)
 
+def train_MSA_CutMix(train_loader, model, criterion, optimizer, epoch):
+    batch_time = AverageMeter()
+    data_time = AverageMeter()
+    losses = AverageMeter()
+    top1 = AverageMeter()
+    top5 = AverageMeter()
+
+    # switch to train mode
+    model.train()
+
+    end = time.time()
+    current_LR = get_learning_rate(optimizer)[0]
 
 
-def train(train_loader, model, criterion, optimizer, epoch):
+    for i, (input, target) in enumerate(train_loader):
+        # measure data loading time
+        data_time.update(time.time() - end)
+
+        input = input.cuda()
+        target = target.cuda()
+        
+        target_stage_name = 'None'
+
+        r = np.random.rand(1)
+        if r < args.cut_prob:
+
+            output = model(input)
+
+            target_stage_index = torch.randint(low=0, high=len(stage_names), size=(1,))[0]
+            target_stage_name = stage_names[target_stage_index]
+
+            target_fmap = dict_activation[target_stage_name].mean(dim=1)
+
+            for k, v in dict_activation.items():
+                v = None # Initialize activation hook for preventing memory leak
+
+            N, W_f, H_f = target_fmap.shape
+
+            top_k_for_stage = args.k * (4**(len(stage_names) - target_stage_index))
+            
+            attention_masks = generate_attentive_mask(target_fmap, top_k = top_k_for_stage)
+
+            upsampled_attention_masks = F.interpolate(attention_masks.unsqueeze(1).repeat([1,3,1,1]), 
+                size=input.shape[-2:], mode='nearest')
+
+            n_occluded_pixels = top_k_for_stage
+            n_total_pixels = W_f * H_f
+
+            rand_index = torch.randperm(input.size()[0]).cuda()
+
+            if args.image_priority == 'A':
+                image_a = (1 - upsampled_attention_masks) * input
+                image_b = upsampled_attention_masks * input[rand_index]
+            elif args.image_priority == 'B':
+                image_a = upsampled_attention_masks * input
+                image_b = (1-upsampled_attention_masks) * input[rand_index]
+
+            input = image_a + image_b
+            
+            occlusion_ratio = (n_occluded_pixels/n_total_pixels) # 1 - Mixed Ratio
+
+            target_a = target
+            target_b = target[rand_index]
+            
+
+            optimizer.zero_grad()
+
+            output = model(input)
+
+            loss = criterion(output, target_a)  * occlusion_ratio + criterion(output, target_b) * (1 - occlusion_ratio)
+        else:
+            # compute output
+            output = model(input)
+
+            for k, v in dict_activation.items():
+                v = None # Initialize activation hook for preventing memory leak
+
+            loss = criterion(output, target)
+
+        if i%100 == 0 and epoch % 20 == 0:
+            input_ex = make_grid(input.detach().cpu(), normalize=True, nrow=8, padding=2).permute([1,2,0])
+            fig, ax = plt.subplots(1,1,figsize=(8,4))
+            ax.imshow(input_ex)
+            ax.set_title(f"Training Batch Examples\nCut_Prob:{args.cut_prob}, Cur_Target: {target_stage_name}, Num_occlusion: {n_occluded_pixels} ")
+            ax.axis('off')
+            fig.savefig(os.path.join('./runs/',args.expname, f"AttentiveCutMix_TrainBatch_K{args.k}_E{epoch}_I{i}.png"))
+        
+
+        # measure accuracy and record loss
+        err1, err5 = accuracy(output.data, target, topk=(1, 5))
+
+        losses.update(loss.item(), input.size(0))
+        top1.update(err1.item(), input.size(0))
+        top5.update(err5.item(), input.size(0))
+
+        # compute gradient and do SGD step
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        # measure elapsed time
+        batch_time.update(time.time() - end)
+        end = time.time()
+
+        if i % args.print_freq == 0 and args.verbose == True:
+            print('Epoch: [{0}/{1}][{2}/{3}]\t'
+                  'LR: {LR:.6f}\t'
+                  'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
+                  'Data {data_time.val:.3f} ({data_time.avg:.3f})\t'
+                  'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
+                  'Top 1-err {top1.val:.4f} ({top1.avg:.4f})\t'
+                  'Top 5-err {top5.val:.4f} ({top5.avg:.4f})'.format(
+                epoch, args.epochs, i, len(train_loader), LR=current_LR, batch_time=batch_time,
+                data_time=data_time, loss=losses, top1=top1, top5=top5))
+
+    print('* Epoch: [{0}/{1}]\t Top 1-err {top1.avg:.3f}  Top 5-err {top5.avg:.3f}\t Train Loss {loss.avg:.3f}'.format(
+        epoch, args.epochs, top1=top1, top5=top5, loss=losses))
+
+    return losses.avg
+
+def train_MSCAM_CutMix(train_loader, model, criterion, optimizer, epoch):
     batch_time = AverageMeter()
     data_time = AverageMeter()
     losses = AverageMeter()
@@ -333,88 +450,85 @@ def train(train_loader, model, criterion, optimizer, epoch):
         target = target.cuda()
 
         r = np.random.rand(1)
-        if args.beta > 0 and r < args.cutmix_prob:
-            # generate mixed sample
-            lam = np.random.beta(args.beta, args.beta)
-            rand_index = torch.randperm(input.size()[0]).cuda()
-            target_a = target
-            target_b = target[rand_index]
-            bbx1, bby1, bbx2, bby2 = rand_bbox(input.size(), lam)
-            input[:, :, bbx1:bbx2, bby1:bby2] = input[rand_index, :, bbx1:bbx2, bby1:bby2]
-            # adjust lambda to exactly match pixel ratio
-            lam = 1 - ((bbx2 - bbx1) * (bby2 - bby1) / (input.size()[-1] * input.size()[-2]))
-            # Save Input Examples
-            input_ex = make_grid(input.detach().cpu(), nrow=8, padding=2).permute([1,2,0])
-            fig, ax = plt.subplots(1,1)
-            ax.imshow(input_ex)
-            ax.set_title(f"Batch Examples\nBeta:{args.beta}, Lambda:{lam}, Cut_Prob:{args.cutmix_prob}")
-            ax.axis('off')
-            fig.savefig(os.path.join('./runs/',args.expname, f"sample_Beta_{args.beta}_Prob_{str(args.cutmix_prob).replace('.','_')}.png"))
 
-            # compute output
-            output = model(input)
-            loss = criterion(output, target_a) * lam + criterion(output, target_b) * (1. - lam)
-        else:
-            # compute output
+        target_stage_name = 'None'
+        top_k_for_stage = 0
+        if r < args.cut_prob:
+
             output = model(input)
 
-            # TODO: Get prediction probability.
-            softened_logits = nn.Softmax()(output)
-
-            # TODO: Find most/least class. (index, score)
-            most_likely_classes, most_likely_scores = torch.argmax(softened_logits, dim=1)
-            # Both are vectors in shape [N]
-            least_likely_classes, least_likely_scores = torch.argmin(softened_logits, dim=1)
-            # Both are vectors in shape [N]
-            
-            # IDEA: If there are no least likely sample in the mini-batch, select the next one.
-
-            # TODO: Acquire activation maps from the final layer.
-            final_fmap = activation['module.layer4']
-            N, C, W, H = final_fmap.shape
-            
-            # TODO: Generate CAM in NxWxH dimension. (N samples of WxH images in a mini-batch)
-
-            weight = model.state_dict()['module.fc.weight'].data.detach()
-            
-            # TODO: Generate CAM for the most similar class.
-            # Dot product between weight and feature maps for each channel (weight_shape: [N_Classes, 2048])
-            for ch_idx in range(weight.shape[1]): # Don't use ReLU in original CAM(CVPR 2017, Zhou et al.)
-                final_fmap[:, ch_idx, :, :] = weight[most_likely_classes, ch_idx] * final_fmap[:, ch_idx, :, :]
-            
-            class_activation_maps = final_fmap.mean(dim=1) # N x C x W x H -> N x W x H
-
-            # Validate Class Activation Map
-
-            cam_grid = make_grid(class_activation_maps, nrow=4)
-            plt.matshow(cam_grid, cmap='viridian', vmin=0, vmax=1) 
-
-            # TODO: Acquire Highly Activated Region Informations (Grid based)
-            #   - Consideration: Allow or not to select multiple regions ... (grid-based?, contour detection?)
-            #   - Attentive CutMix(2020) uses highly activated top N patches from 7x7 grid map.
-            #   - Generate Normalized BBox coordnates (x_min, y_min, x_max, y_max)
-
-            attention_masks, coords = generate_attentive_mask(class_activation_maps, top_k = 3) # Grid-based, Masking Top k samples
-            # attention_masks: [N, W, H]
-            # coords: [[cx_1, cy_1] ... [cx_k, cy_k]]
-
-            cam_masked = attention_masks * class_activation_maps # [N, W, H] = [N, W, H] * [N, W, H]
-
-            # TODO: Find the least likely image from the batch (least_likely_img)
-            #   - If not? -> Randomly choose from the mini-batch.
-            for c in least_likely_classes:
-                if c in target:
-                    print("Found the least likely class sample")
-                else:
-                    print("Cannot found the least least likely class sample")
-                    # Sampling batch index except current batch.
-                    rand_b_index = torch.choice(torch.randperm(input.size()[0]).cuda() + )
-                    
-                
-
-            # TODO: Paste the least likely image on the generated bbox area.
+            target_stage_index = torch.randint(low=0, high=len(stage_names), size=(1,))[0]
+            target_stage_name = stage_names[target_stage_index]
 
             loss = criterion(output, target)
+            loss.backward()
+
+            target_fmap = dict_activation[target_stage_name]
+            target_gradients = dict_gradients[target_stage_name][0]
+
+            for k, v in dict_activation.items():
+                v = None
+
+            for k, v in dict_gradients.items():
+                v = None
+
+            N, C, W_f, H_f = target_fmap.shape
+            
+            importance_weights = F.adaptive_avg_pool2d(target_gradients, 1)
+
+            class_activation_map = torch.mul(target_fmap.detach().cpu(), importance_weights.detach().cpu()).sum(dim=1, keepdim=True)
+            class_activation_map = F.relu(class_activation_map).squeeze(dim=1)
+
+            top_k_for_stage = args.k * (4**(len(stage_names) - target_stage_index - 1))
+            attention_masks = generate_attentive_mask(class_activation_map, top_k = top_k_for_stage) 
+
+            upsampled_attention_masks = F.interpolate(attention_masks.to(device).unsqueeze(1).repeat([1,3,1,1]), 
+                size=input.shape[-2:], mode='nearest')
+
+            n_occluded_pixels = top_k_for_stage
+            n_total_pixels = W_f * H_f
+
+            rand_index = torch.randperm(input.size()[0]).cuda()
+
+            if args.image_priority == 'A':
+                image_a = (1 - upsampled_attention_masks) * input
+                image_b = upsampled_attention_masks * input[rand_index]
+            elif args.image_priority == 'B':
+                image_a = upsampled_attention_masks * input
+                image_b = (1-upsampled_attention_masks) * input[rand_index]
+
+            input = image_a + image_b
+            
+            occlusion_ratio = (n_occluded_pixels/n_total_pixels)
+
+            
+            target_a = target
+            target_b = target[rand_index]
+            
+
+            optimizer.zero_grad()
+
+            output = model(input)
+
+            loss = criterion(output, target_a)  * occlusion_ratio + criterion(output, target_b) * (1 - occlusion_ratio)
+        else:
+            output = model(input)
+
+            for k, v in dict_activation.items():
+                v = None
+            for k, v in dict_gradients.items():
+                v = None
+
+            loss = criterion(output, target)
+
+        if i%100 == 0 and epoch % 20 == 0:
+            input_ex = make_grid(input.detach().cpu(), normalize=True, nrow=8, padding=2).permute([1,2,0])
+            fig, ax = plt.subplots(1,1,figsize=(16,8))
+            ax.imshow(input_ex)
+            ax.set_title(f"Training Batch Examples\nCut_Prob:{args.cut_prob}, Cur_Target: {target_stage_name}, Num_occlusion: {top_k_for_stage} ")
+            ax.axis('off')
+            fig.savefig(os.path.join('./runs/',args.expname, f"AttentiveCutMix_TrainBatch_K{args.k}_E{epoch}_I{i}.png"))
+        
 
         # measure accuracy and record loss
         err1, err5 = accuracy(output.data, target, topk=(1, 5))
@@ -496,6 +610,15 @@ def validate(val_loader, model, criterion, epoch):
         batch_time.update(time.time() - end)
         end = time.time()
 
+        if i%100 == 0 and epoch % 20 == 0:
+            input_ex = make_grid(input.detach().cpu(), normalize=True, nrow=8, padding=2).permute([1,2,0])
+            fig, ax = plt.subplots(1,1,figsize=(10,16))
+            ax.imshow(input_ex)
+            ax.set_title(f"Validation Batch Examples")
+            ax.axis('off')
+        
+            fig.savefig(os.path.join('./runs/',args.expname, f"AttentiveCutMix_ValidBatch_K{args.k}_E{epoch}_I{i}.png"))
+
         if i % args.print_freq == 0 and args.verbose == True:
             print('Test (on val set): [{0}/{1}][{2}/{3}]\t'
                   'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
@@ -508,6 +631,31 @@ def validate(val_loader, model, criterion, epoch):
     print('* Epoch: [{0}/{1}]\t Top 1-err {top1.avg:.3f}  Top 5-err {top5.avg:.3f}\t Test Loss {loss.avg:.3f}'.format(
         epoch, args.epochs, top1=top1, top5=top5, loss=losses))
     return top1.avg, top5.avg, losses.avg
+
+def generate_attentive_mask(attention_map, top_k):
+    """
+        Input:
+            attention_map   (Tensor) : NxWxH tensor after GAP.
+            top_k           (Tensor) : Number of candidates of the most intense points.
+        Output:
+            mask            (Tensor) : NxWxH tensor for masking attentive regions
+            coords          (Tensor) : Normalized coordinates(cx, cy) for masked regions
+    """
+    N, W, H = attention_map.shape
+    x = attention_map.reshape([N, W *H])
+
+    _, indices = torch.sort(x, descending=True, dim=1)
+    top_indices = indices[:, :top_k] # [N, Top_k]
+
+    mask = torch.ones_like(x)
+
+    for i in range(N):
+        mask[i, top_indices[i]] = 0
+    
+    mask = mask.reshape([N, W, H])
+    # print(mask)
+
+    return mask
 
 
 def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
@@ -548,13 +696,12 @@ def adjust_learning_rate(optimizer, epoch):
             lr = args.lr * (0.1 ** (epoch // 75))
         else:
             lr = args.lr * (0.1 ** (epoch // 30))
-    else:
-        if epoch < 50:
-            lr = args.lr
-        elif epoch >= 50 and epoch < 100:
-            lr = args.lr * 0.1
-        elif epoch >= 100 and epoch < 150:
-            lr = args.lr * 0.01 
+
+    elif args.dataset == ('cub200'):
+        lr = args.lr * (0.1 ** (epoch // 30))
+
+    elif args.dataset == ('mosquitodl'):
+        lr = args.lr * (0.1 ** (epoch // 50))
 
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr

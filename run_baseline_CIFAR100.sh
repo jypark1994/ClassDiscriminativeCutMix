@@ -1,0 +1,1 @@
+python3 train_cutout.py --device "0" --dataset cifar100 --net_type resnet --epochs 90 --batch_size 32 --lr 1e-3 --wd 1e-4 --depth 50 --length 16 --expname R50_Cutout_1e-3_CIFAR100_Len16 > R50_Cutout_1e-3_CIFAR100_Len16.txt;
