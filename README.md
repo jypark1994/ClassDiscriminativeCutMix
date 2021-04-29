@@ -52,10 +52,14 @@ python3 train_attentive_cutmix.py --device "3" --cut_prob 0.5 --dataset cub200 -
     - --cut_prob (float, [0, 1]) : Probability for applying Attentive CutMix on given mini-batch.
     - --k (int) : Number of top-k highly activated pixels on the target feature map (Here, 4th block of ResNet50).
 
-- train_CD-CutMix.py   ----------->  __Proposed!__ (Ongoing)
+- train_multiscale_class_attentive_cutmix.py   ----------->  __Proposed!__ (Ongoing)
     - --cut_prob (float, [0, 1]) : Probability for applying Attentive CutMix on given mini-batch.
     - --k (int) : Number of top-k highly activated pixels on the target feature map (Here, 4th block of ResNet50).
-    - --image_candidate : Strategy for target image selection
-        - Mode A: Find the least likely image from the mini-batch with confidence consideration.
-        - Mode B: Randomly samples 'Image B' without any confidence consideration.
+    - --image_priority : Strategy for target image masking
+        - Mode A: Preserve highly activated 'A', and replace the regions to image 'B'
+        - Mode B: Replace highly activated 'A' to 'B', and preserve the rest region.
 
+- kfold_trainer_variants.py
+    - Set of k-fold cross validation sources on refactoring.
+- kfold_main.py
+    - Set of k-fold cross validation sources on refactoring.

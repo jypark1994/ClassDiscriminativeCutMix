@@ -1,22 +1,72 @@
-# To add a new cell, type '# %%'
-# To add a new markdown cell, type '# %% [markdown]'
-# %% [markdown]
-# For K-fold Cross Validation (MosquitoDL)
-# - Split 'Train dataset' in k-folds.
-#     - For each iteration, train with k-1 datasets, and validate with a dataset.
-#     - 1 epoch = 5 fold iteration
-# 
-
-# %%
 import torch
 from torch import optim, nn
-from torchvision import transforms, datasets
-from resnet import ResNet
+from torchvision import transforms, datasets, models
+
 import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+import sys
+import csv
+import time
+import argparse
+
+from kfold_trainer_variants import train_k_fold, train_k_fold_MACM, train_k_fold_MCACM, test
+
+parser = argparse.ArgumentParser(description='Train and Evaluate MosquitoDL using k-fold validation')
+parser.add_argument('--net_type', default='resnet50', type=str,
+                    help='networktype: resnet')
+parser.add_argument('--pretrained', action='store_true')
+parser.add_argument('--gpus', type=str, default='0')
+
+parser.add_argument('--num_epochs', type=int, default=100)
+parser.add_argument('--num_folds', type=int, default=5)
+
+parser.add_argument('--num_workers', type=int, default=8)
+
+parser.add_argument('--batch_size', type=int, default=64)
+parser.add_argument('--learning_rate', type=float, default=5e-3)
+parser.add_argument('--weight_decay', type=float, default=1e-4)
+parser.add_argument('--scheduler_step', type=int, default=15)
+
+parser.add_argument('--expr_name', type=str, default="default")
+parser.add_argument('--dataset_root', type=str, default="../mosquitoClassification/MosquitoDL")
+parser.add_argument('--flag_vervose', action='store_true')
+parser.add_argument('--single_scale', action='store_true')
+
+parser.add_argument('--train_mode', type=str, default="vanilla")
+parser.add_argument('--cut_mode', type=str, default="A")
+parser.add_argument('--cam_mode', type=str, default="label")
+parser.add_argument('--k', type=int, default=1)
+parser.add_argument('--cut_prob', type=float, default=0.5)
+
+args = parser.parse_args()
+
+os.environ['CUDA_VISIBLE_DEVICES'] = args.gpus
+
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-num_folds = 5
+dataset_root = args.dataset_root
+save_path = os.path.join("./results", args.expr_name)
+
+crop_size = 224 # Default
+
+net_type = args.net_type.lower()
+train_mode = args.train_mode
+
+num_epochs = args.num_epochs
+num_folds = args.num_folds
+batch_size = (args.batch_size, args.batch_size)
+num_workers = args.num_workers
+flag_vervose = args.flag_vervose
+single_scale = args.single_scale
+scheduler_step = args.scheduler_step
+target_mode = args.cam_mode
+
+os.makedirs(save_path, exist_ok=True)
+
+f_print = open(os.path.join(save_path, 'output.txt'), 'w')
+
+sys.stdout = f_print # Change the standard output to the file we created.
+
+print(args)
 
 
 def MosquitoDL_fold(root, crop_size=224, num_folds=5, batch_size=(64, 32), num_workers=8):
@@ -43,15 +93,14 @@ def MosquitoDL_fold(root, crop_size=224, num_folds=5, batch_size=(64, 32), num_w
         transforms.RandomAffine(360,scale=[init_scale-0.15, init_scale+0.15]),
         transforms.CenterCrop(224),
         transforms.ToTensor(),
-            # transforms.Normalize(mean=[0.816, 0.744, 0.721],std=[0.146, 0.134, 0.121]),
+        # transforms.Normalize(mean=[0.816, 0.744, 0.721],std=[0.146, 0.134, 0.121]),
     ])
 
     transforms_test = transforms.Compose([
         transforms.CenterCrop(224),
         transforms.ToTensor(),
+        # transforms.Normalize(mean=[0.816, 0.744, 0.721],std=[0.146, 0.134, 0.121]),
     ])
-
-
 
     train_dataset = datasets.ImageFolder(os.path.join(root,'train'), transform=transforms_train)
 
@@ -69,26 +118,18 @@ def MosquitoDL_fold(root, crop_size=224, num_folds=5, batch_size=(64, 32), num_w
                     for x in range(num_folds)}
 
     test_dataset = datasets.ImageFolder(os.path.join(root,'valid'), transform=transforms_test)
-    test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=32, shuffle=False, num_workers=num_workers)
+    test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=32, shuffle=True, num_workers=num_workers)
 
     num_classes = 6
 
     return train_loader, test_loader, num_classes
 
-num_epochs = 100
-
-root = "../mosquitoClassification/MosquitoDL"
-crop_size = 224
-num_folds = 5
-batch_size = (32, 32)
-num_workers = 8
-
-train_loader, test_loader, num_classes = MosquitoDL_fold(root, crop_size, num_folds, batch_size, num_workers)
+train_loader, test_loader, num_classes = MosquitoDL_fold(dataset_root, crop_size, num_folds, batch_size, num_workers)
 
 # %%
 class Wrapper(nn.Module):
     '''
-        Author: Junyoung Park(jy_park@inu.ac.kr)
+        Author: Junyoung Park (jy_park@inu.ac.kr)
     '''
     def __init__(self, model, stage_names):
         super(Wrapper, self).__init__()
@@ -142,52 +183,78 @@ class Wrapper(nn.Module):
 
 
 # %%
-model = ResNet('mosquitodl', 50, 6, True)
-model.fc = nn.Linear(model.fc.in_features, 6)
+model = models.resnet50(pretrained=args.pretrained)
+model.fc = nn.Linear(model.fc.in_features, num_classes)
 model = nn.DataParallel(model)
 
-pretrained_path = './pretrained/R50_ImageNet_Baseline.pth'
+# pretrained_path = './pretrained/R50_ImageNet_Baseline.pth'
 
-if pretrained_path != None:
-    pretrained_dict = torch.load(pretrained_path)['state_dict']
-    new_model_dict = model.state_dict()
+# if pretrained_path != None:
+#     pretrained_dict = torch.load(pretrained_path)['state_dict']
+#     new_model_dict = model.state_dict()
 
-    for k, v in new_model_dict.items():
-        if 'fc' in k:
-            continue
-        else:
-            new_model_dict[k] = pretrained_dict[k]
+#     for k, v in new_model_dict.items():
+#         if 'fc' in k:
+#             continue
+#         else:
+#             new_model_dict[k] = pretrained_dict[k]
 
-    model.load_state_dict(new_model_dict)
-    print(f"Load pretrained state dict \'{pretrained_path}\'")
+#     model.load_state_dict(new_model_dict)
+#     print(f"Load pretrained state dict \'{pretrained_path}\'")
 
-stage_names = ['layer1','layer2','layer3','layer4']
+if 'resnet' in net_type:
+    stage_names = ['layer1','layer2','layer3','layer4']
+elif net_type == 'mobilenetv2':
+    stage_names = ['features.2','features.4','features.7','features.14']
+else:
+    assert "Unsupported network type !"
 
-model = Wrapper(model, stage_names)
+if single_scale:
+        stage_names = stage_names[-1]
+
+model = Wrapper(model, stage_names) # Wrapper for registering hooks for 'stage_names' of the 'model'.
 
 model = model.to(device)
 
 criterion = torch.nn.CrossEntropyLoss()
 
-optimizer = optim.SGD(model.parameters(), lr=1e-4, weight_decay=1e-4, momentum=0.9)
-scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=25, gamma=0.1)
-
-
-# %%
-from kfold_trainer import train_k_fold, test
-from kfold_trainer_variants import train_k_fold_MACM, train_k_fold_MCACM
-save_name = "./test.pth"
-
+# optimizer = optim.SGD(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay, momentum=0.9)
+optimizer = optim.SGD(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay, momentum=0.9)
+scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=args.scheduler_step, gamma=0.75)
 
 # %%
+
+logs = []
+logs.append(['epoch', 'loss_tr', 'acc_tr', 'loss_val', 'acc_val', 'loss_test', 'acc_test'])
+elapsed_time = 0
+
 for epoch in range(num_epochs):
     print(f"==== Current Epoch: {epoch+1}")
 
     best_model = None
     best_test_acc = 0
+    epoch_start_t = time.time()
 
     print(f"\t - Train/Val Phase ...")
-    model, (epoch_train_loss, epoch_train_acc), (epoch_valid_loss, epoch_valid_acc) =         train_k_fold_MCACM(model, train_loader, optimizer, scheduler, criterion, num_folds, epoch, device,             net_type='resnet', k=1, image_priority='A', cut_prob=0, save_path='./batch_samples/', target_mode='label')
+
+    if train_mode == 'vanilla':
+        model, (epoch_train_loss, epoch_train_acc), (epoch_valid_loss, epoch_valid_acc) = \
+            train_k_fold(model, train_loader, optimizer, scheduler, criterion, num_folds, epoch, device, flag_vervose=flag_vervose, \
+            net_type='resnet', save_path=save_path)
+    elif train_mode == 'cutmix':
+        model, (epoch_train_loss, epoch_train_acc), (epoch_valid_loss, epoch_valid_acc) = \
+            train_k_fold_CutMix(model, train_loader, optimizer, scheduler, criterion, num_folds, epoch, device, flag_vervose=flag_vervose, \
+            net_type='resnet', cut_prob=args.cut_prob, save_path=save_path)
+    elif train_mode == 'MACM': # Multiscale Attentive Cutmix
+        model, (epoch_train_loss, epoch_train_acc), (epoch_valid_loss, epoch_valid_acc) = \
+            train_k_fold_MACM(model, train_loader, optimizer, scheduler, criterion, num_folds, epoch, device, flag_vervose=flag_vervose, \
+            net_type='resnet', k=args.k, image_priority=args.cut_mode, cut_prob=args.cut_prob, save_path=save_path, target_mode='label')
+    elif train_mode == 'MCACM': # Multiscale Class Attentive Cutmix
+        model, (epoch_train_loss, epoch_train_acc), (epoch_valid_loss, epoch_valid_acc) = \
+            train_k_fold_MCACM(model, train_loader, optimizer, scheduler, criterion, num_folds, epoch, device, flag_vervose=flag_vervose, \
+            net_type='resnet', k=args.k, image_priority=args.cut_mode, cut_prob=args.cut_prob, cam_mode=args.cam_mode, save_path=save_path, target_mode='label')
+    else:
+        assert 'Invalid training mode !'
 
     print(f"\t - Epoch training loss : {epoch_train_loss:.4f}")
     print(f"\t - Epoch training accuracy : {epoch_train_acc*100:.4f}%")
@@ -195,13 +262,43 @@ for epoch in range(num_epochs):
     print(f"\t - Epoch validation accuracy : {epoch_valid_acc*100:.4f}%")
 
     print(f"\t - Test Phase ...")
-    model, epoch_test_loss, epoch_test_acc = test(model, test_loader, criterion, device)
+    model, epoch_test_loss, epoch_test_acc = test(model, test_loader, criterion, device, save_path, epoch)
     print(f"\t - Epoch test loss : {epoch_test_loss:.4f}")
     print(f"\t - Epoch test accuracy : {epoch_test_acc*100:.4f}%")
 
+    logs.append([epoch, epoch_train_loss, epoch_train_acc, \
+        epoch_valid_loss, epoch_valid_acc, \
+        epoch_test_loss, epoch_test_acc])
+
+    with open(os.path.join(save_path, 'log.csv'), 'w') as f:
+      
+        # using csv.writer method from CSV package
+        write = csv.writer(f)
+        write.writerows(logs)
+
     if epoch_test_acc > best_test_acc:
         best_test_acc = epoch_test_acc
-        print(f"Save best model with test accuracy: {best_test_acc*100:.4f}%")
-        torch.save(model.state_dict(), save_name)
 
+        best_dict = {
+            'epoch': epoch,
+            'best_test_acc': best_test_acc,
+            'model': model.state_dict(),
+        }
+
+        print(f"Save best model with test accuracy: {best_test_acc*100:.4f}%")
+        torch.save(best_dict, os.path.join(save_path,'best_model.pth'))
+
+    epoch_t = time.time() - epoch_start_t
+    elapsed_time += epoch_t
+    estimated_time = epoch_t * (num_epochs - epoch)
+
+    epoch_t_gm = time.gmtime(epoch_t)
+    elapsed_time_gm = time.gmtime(elapsed_time)
+    estimated_time_gm = time.gmtime(estimated_time)
+
+    print(f"- Epoch time: {epoch_t_gm.tm_hour}[h] {epoch_t_gm.tm_min}[m] {epoch_t_gm.tm_sec}[s]")
+    print(f"- Elapsed time: {elapsed_time_gm.tm_hour}[h] {elapsed_time_gm.tm_min}[m] {elapsed_time_gm.tm_sec}[s]")
+    print(f"- Estimated time: {estimated_time_gm.tm_hour}[h] {estimated_time_gm.tm_min}[m] {estimated_time_gm.tm_sec}[s]")
+    
+f_print.close()
 
