@@ -24,7 +24,7 @@ parser.add_argument('--num_workers', type=int, default=8)
 parser.add_argument('--batch_size', type=int, default=64)
 parser.add_argument('--learning_rate', type=float, default=5e-3)
 parser.add_argument('--weight_decay', type=float, default=1e-4)
-parser.add_argument('--scheduler_step', type=int, default=15)
+parser.add_argument('--scheduler_step', type=int, default=5)
 
 parser.add_argument('--expr_name', type=str, default="default")
 parser.add_argument('--dataset_root', type=str, default="../mosquitoClassification/MosquitoDL")
@@ -109,7 +109,10 @@ def MosquitoDL_fold(root, crop_size=224, num_folds=5, batch_size=(64, 32), num_w
     fold_lengths = [len_fold for x in range(num_folds)]
 
     if(len_fold_rest != 0):
+        fold_lengths.pop()
         fold_lengths.append(len_fold_rest + len_fold)
+
+    print(f"Dataset with length {len(train_dataset)} divided into {fold_lengths} (Sum:{sum(fold_lengths)})")
 
     train_dataset = torch.utils.data.random_split(train_dataset, fold_lengths)
 
@@ -148,7 +151,7 @@ class Wrapper(nn.Module):
                 self.dict_activation[name] = output.data
             return get_class_activation
 
-        def backward_hook_function(name): # Hook function for the forward pass.
+        def backward_hook_function(name): # Hook function for the backward pass.
             def get_class_gradient(module, input, output):
                 self.dict_gradients[name] = output
             return get_class_gradient
@@ -172,8 +175,6 @@ class Wrapper(nn.Module):
         for k, v in self.dict_gradients.items():
             print("[BW] Layer:", k)      
             print("[BW] Shape:", v.shape)
-
-
 
     def clear_dict(self):
         for k, v in self.dict_activation.items():
@@ -227,12 +228,13 @@ scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=args.scheduler_step, 
 logs = []
 logs.append(['epoch', 'loss_tr', 'acc_tr', 'loss_val', 'acc_val', 'loss_test', 'acc_test'])
 elapsed_time = 0
+best_model = None
+best_test_acc = 0
 
 for epoch in range(num_epochs):
     print(f"==== Current Epoch: {epoch+1}")
 
-    best_model = None
-    best_test_acc = 0
+
     epoch_start_t = time.time()
 
     print(f"\t - Train/Val Phase ...")

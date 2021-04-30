@@ -10,7 +10,7 @@ from tools import generate_attentive_mask, print_v
 
 def train(model, train_loader, optimizer, scheduler, criterion, cur_epoch, device, **kwargs):
     """
-        train_k_fold_MCACM - Training code for Multiscale Attentive CutMix
+        train_k_fold - Training code for Multiscale Attentive CutMix
 
         model(torch.nn.Module): Target model to train.
         train_loader(list(DataLoader)): Should be a list with splitted dataset.
