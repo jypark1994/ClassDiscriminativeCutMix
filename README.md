@@ -20,7 +20,7 @@ This repository is a fork of original CutMix implementation from 'clovaai' (http
 
 
 
-### Usage
+### Usage (Deprecated! Soon be updated.)
 
 - train_cutout.py
 

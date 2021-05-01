@@ -27,7 +27,7 @@ parser.add_argument('--batch_size', type=int, default=64)
 parser.add_argument('--crop_size', type=int, default=224)
 parser.add_argument('--learning_rate', type=float, default=5e-3)
 parser.add_argument('--weight_decay', type=float, default=1e-4)
-parser.add_argument('--scheduler_step', type=int, default=25)
+parser.add_argument('--scheduler_step', type=int, default=30)
 
 parser.add_argument('--expr_name', type=str, default="default")
 parser.add_argument('--dataset_root', type=str, default="~/datasets")
@@ -52,7 +52,7 @@ save_path = os.path.join("./results", args.expr_name)
 crop_size = args.crop_size # Default
 net_type = args.net_type.lower()
 data_type = args.data_type.lower()
-train_mode = args.train_mode
+train_mode = args.train_mode.lower()
 num_epochs = args.num_epochs
 batch_size = (args.batch_size, args.batch_size)
 num_workers = args.num_workers
@@ -78,10 +78,10 @@ elif 'cifar' in data_type:
         train_loader, valid_loader, num_classes = CIFAR_loaders(dataset_root, '100', batch_size, num_workers)
     else:
         assert f'Unrecognized \'{data_type}\' for CIFAR dataset.'
-elif args.dataset == 'imagenet':
+elif data_type == 'imagenet':
     train_loader, valid_loader, num_classes = ImageNet_loaders(dataset_root, batch_size, num_workers)
-elif args.dataset == 'cub200':
-    train_loader, valid_loader, num_classes = ImageNet_loaders(dataset_root, batch_size, num_workers)
+elif data_type == 'cub200':
+    train_loader, valid_loader, num_classes = CUB200_loaders(dataset_root, crop_size, batch_size, num_workers)
 else:
     assert f'Unsupported Dataset Type \'{data_type}\'.'
 
@@ -119,7 +119,7 @@ print(f"\t - Done !")
 print("Building Optimizer Related Objects")
 criterion = torch.nn.CrossEntropyLoss()
 optimizer = optim.SGD(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay, momentum=0.9)
-scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=args.scheduler_step, gamma=0.75)
+scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=args.scheduler_step, gamma=0.1)
 print(f"\t - Done !")
 # %%
 
@@ -146,11 +146,11 @@ for epoch in range(num_epochs):
         model, epoch_train_loss, epoch_train_acc = \
             train_CutMix(model, train_loader, optimizer, scheduler, criterion, epoch, device, flag_vervose=flag_vervose, \
             net_type='resnet', cut_prob=args.cut_prob, save_path=save_path)
-    elif train_mode == 'MACM': # Multiscale Attentive Cutmix
+    elif train_mode == 'macm': # Multiscale Attentive Cutmix
         model, epoch_train_loss, epoch_train_acc = \
             train_MACM(model, train_loader, optimizer, scheduler, criterion, epoch, device, flag_vervose=flag_vervose, \
             net_type='resnet', k=args.k, image_priority=args.cut_mode, cut_prob=args.cut_prob, save_path=save_path, target_mode='label')
-    elif train_mode == 'MCACM': # Multiscale Class Attentive Cutmix
+    elif train_mode == 'mcacm': # Multiscale Class Attentive Cutmix
         model, epoch_train_loss, epoch_train_acc = \
             train_MCACM(model, train_loader, optimizer, scheduler, criterion, epoch, device, flag_vervose=flag_vervose, \
             net_type='resnet', k=args.k, image_priority=args.cut_mode, cut_prob=args.cut_prob, cam_mode=args.cam_mode, save_path=save_path, target_mode='label')

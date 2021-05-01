@@ -3,6 +3,8 @@ import os
 import torch
 from torchvision import datasets, transforms
 from transforms_imagenet import *
+import utils
+from cub200 import CUB200
 
 def CIFAR_loaders(root, type='10',batch_size=(64, 32), num_workers=4):
 
@@ -64,9 +66,9 @@ def ImageNet_loaders(root, batch_size=(64, 32), num_workers=4):
     normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                         std=[0.229, 0.224, 0.225])
 
-    jittering = utils.ColorJitter(brightness=0.4, contrast=0.4,
+    jittering = ColorJitter(brightness=0.4, contrast=0.4,
                                     saturation=0.4)
-    lighting = utils.Lighting(alphastd=0.1,
+    lighting = Lighting(alphastd=0.1,
                                 eigval=[0.2175, 0.0188, 0.0045],
                                 eigvec=[[-0.5675, 0.7192, 0.4009],
                                         [-0.5808, -0.0045, -0.8140],

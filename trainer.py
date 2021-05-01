@@ -16,8 +16,6 @@ def train(model, train_loader, optimizer, scheduler, criterion, cur_epoch, devic
         train_loader(list(DataLoader)): Should be a list with splitted dataset.
         vervose(bool): Print detailed train/val status.
     """
-    epoch_train_loss = 0
-    epoch_train_acc = 0
 
     flag_vervose = kwargs['flag_vervose']
     save_path = kwargs['save_path']
@@ -41,7 +39,7 @@ def train(model, train_loader, optimizer, scheduler, criterion, cur_epoch, devic
 
         if idx%100 == 0 and cur_epoch % 20 == 0:
             input_ex = make_grid(batch.detach().cpu(), normalize=True, nrow=8, padding=2).permute([1,2,0])
-            fig, ax = plt.subplots(1,1,figsize=(8,4))
+            fig, ax = plt.subplots(1,1,figsize=(8,(batch.size(0)//8)+1))
             ax.imshow(input_ex)
             ax.set_title(f"Train Batch Examples")
             ax.axis('off')
@@ -55,11 +53,14 @@ def train(model, train_loader, optimizer, scheduler, criterion, cur_epoch, devic
         optimizer.step()
         scheduler.step()
 
+    epoch_train_loss = train_loss / len(train_loader)
+    epoch_train_acc = train_n_corrects/train_n_samples
+
     return model, epoch_train_loss, epoch_train_acc
 
 def train_CutMix(model, train_loader, optimizer, scheduler, criterion, cur_epoch, device, **kwargs):
     """
-        train - Training code with vanilla method
+        train - Training code with CutMix method (Original: ClovaAI)
 
         model(torch.nn.Module): Target model to train.
         train_loader(list(DataLoader)): Should be a list with splitted dataset.
@@ -110,7 +111,7 @@ def train_CutMix(model, train_loader, optimizer, scheduler, criterion, cur_epoch
 
         if idx%100 == 0 and cur_epoch % 20 == 0:
             input_ex = make_grid(batch.detach().cpu(), normalize=True, nrow=8, padding=2).permute([1,2,0])
-            fig, ax = plt.subplots(1,1,figsize=(8,4))
+            fig, ax = plt.subplots(1,1,figsize=(8,(batch.size(0)//8)+1))
             ax.imshow(input_ex)
             ax.set_title(f"Train Batch Examples")
             ax.axis('off')
@@ -123,6 +124,9 @@ def train_CutMix(model, train_loader, optimizer, scheduler, criterion, cur_epoch
         loss.backward()
         optimizer.step()
         scheduler.step()
+
+    epoch_train_loss = train_loss / len(train_loader)
+    epoch_train_acc = train_n_corrects/train_n_samples
 
     return model, epoch_train_loss, epoch_train_acc
 
@@ -214,7 +218,7 @@ def train_MACM(model, train_loader, optimizer, scheduler, criterion, cur_epoch, 
 
         if idx%100 == 0 and cur_epoch % 20 == 0:
             input_ex = make_grid(batch.detach().cpu(), normalize=True, nrow=8, padding=2).permute([1,2,0])
-            fig, ax = plt.subplots(1,1,figsize=(8,4))
+            fig, ax = plt.subplots(1,1,figsize=(8,(batch.size(0)//8)+1))
             ax.imshow(input_ex)
             ax.set_title(f"Train MACM Batch Examples\nCut_Prob:{cut_prob}, Cur_Target: {target_stage_name}, Num_occlusion: {top_k_for_stage} ")
             ax.axis('off')
@@ -227,6 +231,9 @@ def train_MACM(model, train_loader, optimizer, scheduler, criterion, cur_epoch, 
         loss.backward()
         optimizer.step()
         scheduler.step()
+
+    epoch_train_loss = train_loss / len(train_loader)
+    epoch_train_acc = train_n_corrects/train_n_samples
 
     return model, epoch_train_loss, epoch_train_acc
 
@@ -338,7 +345,7 @@ def train_MCACM(model, train_loader, optimizer, scheduler, criterion, cur_epoch,
 
         if idx%100 == 0 and cur_epoch % 20 == 0:
             input_ex = make_grid(batch.detach().cpu(), normalize=True, nrow=8, padding=2).permute([1,2,0])
-            fig, ax = plt.subplots(1,1,figsize=(8,4))
+            fig, ax = plt.subplots(1,1,figsize=(8,(batch.size(0)//8)+1))
             ax.imshow(input_ex)
             ax.set_title(f"Train MCACM Batch Examples\nCut_Prob:{cut_prob}, Cur_Target: {target_stage_name}, Num_occlusion: {top_k_for_stage} ")
             ax.axis('off')
@@ -351,6 +358,9 @@ def train_MCACM(model, train_loader, optimizer, scheduler, criterion, cur_epoch,
         loss.backward()
         optimizer.step()
         scheduler.step()
+
+    epoch_train_loss = train_loss / len(train_loader)
+    epoch_train_acc = train_n_corrects/train_n_samples
 
     return model, epoch_train_loss, epoch_train_acc
 
@@ -380,14 +390,14 @@ def test(model, test_loader, criterion, device, save_path, cur_epoch):
 
             if idx%100 == 0 and cur_epoch % 20 == 0:
                 input_ex = make_grid(batch.detach().cpu(), normalize=True, nrow=8, padding=2).permute([1,2,0])
-                fig, ax = plt.subplots(1,1,figsize=(8,4))
+                fig, ax = plt.subplots(1,1,figsize=(8,(batch.size(0)//8)+1))
                 ax.imshow(input_ex)
                 ax.set_title(f"Testing Batch Examples")
                 ax.axis('off')
             
                 fig.savefig(os.path.join(save_path, f"Test_BatchSample_E{cur_epoch}_I{idx}.png"))
 
-    test_loss /= test_n_samples
+    test_loss /= len(test_loader)
     test_acc = test_n_corrects/test_n_samples
 
     return model, test_loss, test_acc
