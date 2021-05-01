@@ -14,6 +14,10 @@ This repository is a fork of original CutMix implementation from 'clovaai' (http
         - Added callback function for a forward hook.
     - Acquire class-wise activation maps from the final layer.
 
+- Added Multi-/Single-scale Class Discriminative CutMix (Proposed!)
+
+- On refactoring k-fold and basic training codes.
+
 
 
 ### Usage

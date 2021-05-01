@@ -1,123 +1,85 @@
-# original code: https://github.com/eladhoffer/convNet.pytorch/blob/master/preprocess.py
-
 import torch
-import random
+from torch import nn
 
-__all__ = ["Compose", "Lighting", "ColorJitter"]
-
-
-class Compose(object):
-    """Composes several transforms together.
-
-    Args:
-        transforms (list of ``Transform`` objects): list of transforms to compose.
-
-    Example:
-        >>> transforms.Compose([
-        >>>     transforms.CenterCrop(10),
-        >>>     transforms.ToTensor(),
-        >>> ])
+def generate_attentive_mask(attention_map, top_k):
     """
+        Author: Junyoung Park (jy_park@inu.ac.kr)
+        Input:
+            attention_map   (Tensor) : NxWxH tensor after GAP.
+            top_k           (Tensor) : Number of candidates of the most intense points.
+        Output:
+            mask            (Tensor) : NxWxH tensor for masking attentive regions
+            coords          (Tensor) : Normalized coordinates(cx, cy) for masked regions
+    """
+    N, W, H = attention_map.shape
 
-    def __init__(self, transforms):
-        self.transforms = transforms
+    x = attention_map.reshape([N, W *H])
 
-    def __call__(self, img):
-        for t in self.transforms:
-            img = t(img)
-        return img
+    _, indices = torch.sort(x, descending=True, dim=1)
+    top_indices = indices[:, :top_k] # [N, Top_k]
 
-    def __repr__(self):
-        format_string = self.__class__.__name__ + '('
-        for t in self.transforms:
-            format_string += '\n'
-            format_string += '    {0}'.format(t)
-        format_string += '\n)'
-        return format_string
+    mask = torch.ones_like(x)
 
+    for i in range(N):
+        mask[i, top_indices[i]] = 0
+    
+    mask = mask.reshape([N, W, H])
+    # print_v(mask)
 
-class Lighting(object):
-    """Lighting noise(AlexNet - style PCA - based noise)"""
+    return mask
 
-    def __init__(self, alphastd, eigval, eigvec):
-        self.alphastd = alphastd
-        self.eigval = torch.Tensor(eigval)
-        self.eigvec = torch.Tensor(eigvec)
+def print_v(str_t, vervose=False):
+    if vervose:
+        print(str_t)
 
-    def __call__(self, img):
-        if self.alphastd == 0:
-            return img
+class Wrapper(nn.Module):
+    '''
+        Author: Junyoung Park (jy_park@inu.ac.kr)
+    '''
+    def __init__(self, model, stage_names):
+        super(Wrapper, self).__init__()
 
-        alpha = img.new().resize_(3).normal_(0, self.alphastd)
-        rgb = self.eigvec.type_as(img).clone() \
-            .mul(alpha.view(1, 3).expand(3, 3)) \
-            .mul(self.eigval.view(1, 3).expand(3, 3)) \
-            .sum(1).squeeze()
+        self.dict_activation = {}
+        self.dict_gradients = {}
+        self.forward_hook_handles = []
+        self.backward_hook_handles = []
 
-        return img.add(rgb.view(3, 1, 1).expand_as(img))
+        self.net = model
+        self.stage_names = stage_names
+        self.num_stages = len(self.stage_names)
 
+        def forward_hook_function(name): # Hook function for the forward pass.
+            def get_class_activation(module, input, output):
+                self.dict_activation[name] = output.data
+            return get_class_activation
 
-class Grayscale(object):
+        def backward_hook_function(name): # Hook function for the backward pass.
+            def get_class_gradient(module, input, output):
+                self.dict_gradients[name] = output
+            return get_class_gradient
 
-    def __call__(self, img):
-        gs = img.clone()
-        gs[0].mul_(0.299).add_(0.587, gs[1]).add_(0.114, gs[2])
-        gs[1].copy_(gs[0])
-        gs[2].copy_(gs[0])
-        return gs
+        for L in self.stage_names:
+            for k, v in self.net.named_modules():
+                if L in k:
+                    self.forward_hook_handles.append(v.register_forward_hook(forward_hook_function(L)))
+                    self.backward_hook_handles.append(v.register_backward_hook(backward_hook_function(L)))
+                    print(f"Registered forward/backward hook on \'{k}\'")
+                    break
 
+    def forward(self, x):
+        self.clear_dict()
+        return self.net(x)
+            
+    def print_current_dicts(self):
+        for k, v in self.dict_activation.items():
+            print("[FW] Layer:", k)
+            print("[FW] Shape:", v.shape)
+        for k, v in self.dict_gradients.items():
+            print("[BW] Layer:", k)      
+            print("[BW] Shape:", v.shape)
 
-class Saturation(object):
-
-    def __init__(self, var):
-        self.var = var
-
-    def __call__(self, img):
-        gs = Grayscale()(img)
-        alpha = random.uniform(-self.var, self.var)
-        return img.lerp(gs, alpha)
-
-
-class Brightness(object):
-
-    def __init__(self, var):
-        self.var = var
-
-    def __call__(self, img):
-        gs = img.new().resize_as_(img).zero_()
-        alpha = random.uniform(-self.var, self.var)
-        return img.lerp(gs, alpha)
-
-
-class Contrast(object):
-
-    def __init__(self, var):
-        self.var = var
-
-    def __call__(self, img):
-        gs = Grayscale()(img)
-        gs.fill_(gs.mean())
-        alpha = random.uniform(-self.var, self.var)
-        return img.lerp(gs, alpha)
-
-
-class ColorJitter(object):
-
-    def __init__(self, brightness=0.4, contrast=0.4, saturation=0.4):
-        self.brightness = brightness
-        self.contrast = contrast
-        self.saturation = saturation
-
-    def __call__(self, img):
-        self.transforms = []
-        if self.brightness != 0:
-            self.transforms.append(Brightness(self.brightness))
-        if self.contrast != 0:
-            self.transforms.append(Contrast(self.contrast))
-        if self.saturation != 0:
-            self.transforms.append(Saturation(self.saturation))
-
-        random.shuffle(self.transforms)
-        transform = Compose(self.transforms)
-        # print(transform)
-        return transform(img)
+    def clear_dict(self):
+        for k, v in self.dict_activation.items():
+            v = None
+        for k, v in self.dict_gradients.items():
+            v = None

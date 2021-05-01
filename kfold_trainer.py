@@ -105,7 +105,7 @@ def train_k_fold(model, train_loader, optimizer, scheduler, criterion, num_folds
 
                 loss.backward()
                 optimizer.step()
-                scheduler.step()
+                
 
             fold_train_loss /= fold_train_n_samples
             fold_train_acc = fold_train_n_corrects / fold_train_n_samples
@@ -155,6 +155,8 @@ def train_k_fold(model, train_loader, optimizer, scheduler, criterion, num_folds
     epoch_train_acc /= num_folds
     epoch_valid_loss /= num_folds
     epoch_valid_acc /= num_folds
+
+    scheduler.step()
 
     return model, (epoch_train_loss, epoch_train_acc), (epoch_valid_loss, epoch_valid_acc)
 
@@ -468,7 +470,7 @@ def train_k_fold_MCACM(model, train_loader, optimizer, scheduler, criterion, num
 
                 loss.backward()
                 optimizer.step()
-                scheduler.step()
+                
 
             fold_train_loss /= fold_train_n_samples
             fold_train_acc = fold_train_n_corrects / fold_train_n_samples
@@ -519,6 +521,8 @@ def train_k_fold_MCACM(model, train_loader, optimizer, scheduler, criterion, num
     epoch_valid_loss /= num_folds
     epoch_valid_acc /= num_folds
 
+    scheduler.step()
+    
     return model, (epoch_train_loss, epoch_train_acc), (epoch_valid_loss, epoch_valid_acc)
 
 def test(model, test_loader, criterion, device, save_path, cur_epoch):

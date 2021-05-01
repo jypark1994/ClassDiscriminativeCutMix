@@ -8,7 +8,7 @@ import csv
 import time
 import argparse
 
-from kfold_trainer_variants import train_k_fold, train_k_fold_MACM, train_k_fold_MCACM, test
+from kfold_trainer import train_k_fold, train_k_fold_MACM, train_k_fold_MCACM, test
 
 parser = argparse.ArgumentParser(description='Train and Evaluate MosquitoDL using k-fold validation')
 parser.add_argument('--net_type', default='resnet50', type=str,
@@ -19,19 +19,18 @@ parser.add_argument('--gpus', type=str, default='0')
 parser.add_argument('--num_epochs', type=int, default=100)
 parser.add_argument('--num_folds', type=int, default=5)
 
-parser.add_argument('--num_workers', type=int, default=8)
-
+parser.add_argument('--num_workers', type=int, default=4)
 parser.add_argument('--batch_size', type=int, default=64)
 parser.add_argument('--learning_rate', type=float, default=5e-3)
 parser.add_argument('--weight_decay', type=float, default=1e-4)
-parser.add_argument('--scheduler_step', type=int, default=5)
+parser.add_argument('--scheduler_step', type=int, default=25)
 
 parser.add_argument('--expr_name', type=str, default="default")
 parser.add_argument('--dataset_root', type=str, default="../mosquitoClassification/MosquitoDL")
 parser.add_argument('--flag_vervose', action='store_true')
 parser.add_argument('--single_scale', action='store_true')
 
-parser.add_argument('--train_mode', type=str, default="vanilla")
+parser.add_argument('--train_mode', type=str, default="cutmix")
 parser.add_argument('--cut_mode', type=str, default="A")
 parser.add_argument('--cam_mode', type=str, default="label")
 parser.add_argument('--k', type=int, default=1)
@@ -67,7 +66,6 @@ f_print = open(os.path.join(save_path, 'output.txt'), 'w')
 sys.stdout = f_print # Change the standard output to the file we created.
 
 print(args)
-
 
 def MosquitoDL_fold(root, crop_size=224, num_folds=5, batch_size=(64, 32), num_workers=8):
     '''
@@ -219,7 +217,6 @@ model = model.to(device)
 
 criterion = torch.nn.CrossEntropyLoss()
 
-# optimizer = optim.SGD(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay, momentum=0.9)
 optimizer = optim.SGD(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay, momentum=0.9)
 scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=args.scheduler_step, gamma=0.75)
 

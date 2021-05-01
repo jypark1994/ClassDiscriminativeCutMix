@@ -6,11 +6,11 @@ import os
 import numpy as np
 import matplotlib.pyplot as plt
 
-from tools import generate_attentive_mask, print_v
+from utils import generate_attentive_mask, print_v
 
 def train(model, train_loader, optimizer, scheduler, criterion, cur_epoch, device, **kwargs):
     """
-        train_k_fold - Training code for Multiscale Attentive CutMix
+        train - Training code with vanilla method
 
         model(torch.nn.Module): Target model to train.
         train_loader(list(DataLoader)): Should be a list with splitted dataset.
@@ -28,7 +28,7 @@ def train(model, train_loader, optimizer, scheduler, criterion, cur_epoch, devic
     train_n_corrects = 0
     train_n_samples = 0
 
-    for idx, data in enumerate(train_loader[cur_train_fold]):
+    for idx, data in enumerate(train_loader):
 
         batch, labels = data[0].to(device), data[1].to(device)
         
@@ -55,17 +55,82 @@ def train(model, train_loader, optimizer, scheduler, criterion, cur_epoch, devic
         optimizer.step()
         scheduler.step()
 
-        print_v(f"\t\t\t - Training loss : {train_loss:.4f}", flag_vervose)
-        print_v(f"\t\t\t - Training accuracy : {train_acc*100:.4f}%", flag_vervose)
+    return model, epoch_train_loss, epoch_train_acc
 
-      
+def train_CutMix(model, train_loader, optimizer, scheduler, criterion, cur_epoch, device, **kwargs):
+    """
+        train - Training code with vanilla method
+
+        model(torch.nn.Module): Target model to train.
+        train_loader(list(DataLoader)): Should be a list with splitted dataset.
+        vervose(bool): Print detailed train/val status.
+    """
+    epoch_train_loss = 0
+    epoch_train_acc = 0
+
+    flag_vervose = kwargs['flag_vervose']
+    save_path = kwargs['save_path']
+    cut_prob = kwargs['cut_prob']
+    beta = 1 # In CutMix, they use Uniform(0, 1) distribution where Beta(1, 1).
+
+    model.train()
+
+    train_loss = 0
+    train_n_corrects = 0
+    train_n_samples = 0
+
+    for idx, data in enumerate(train_loader):
+
+        batch, labels = data[0].to(device), data[1].to(device)
+        
+        optimizer.zero_grad()
+
+        r = np.random.rand(1)
+
+        if beta > 0 and r < cut_prob:
+            # generate mixed sample
+            lam = np.random.beta(args.beta, args.beta)
+            rand_index = torch.randperm(batch.size()[0]).cuda()
+            labels_a = labels
+            labels_b = labels[rand_index]
+            
+            bbx1, bby1, bbx2, bby2 = rand_bbox(batch.size(), lam)
+            batch[:, :, bbx1:bbx2, bby1:bby2] = batch[rand_index, :, bbx1:bbx2, bby1:bby2]
+            # adjust lambda to exactly match pixel ratio
+            lam = 1 - ((bbx2 - bbx1) * (bby2 - bby1) / (batch.size()[-1] * batch.size()[-2]))
+            # Save Input Examples
+            
+            # compute output
+            output = model(batch)
+            loss = criterion(output, labels_a) * lam + criterion(output, labels_b) * (1. - lam)
+        else:
+            # compute output
+            output = model(batch)
+            loss = criterion(output, labels)
+
+        if idx%100 == 0 and cur_epoch % 20 == 0:
+            input_ex = make_grid(batch.detach().cpu(), normalize=True, nrow=8, padding=2).permute([1,2,0])
+            fig, ax = plt.subplots(1,1,figsize=(8,4))
+            ax.imshow(input_ex)
+            ax.set_title(f"Train Batch Examples")
+            ax.axis('off')
+            fig.savefig(os.path.join(save_path, f"Train_BatchSample_E{cur_epoch}_I{idx}.png"))
+            
+        train_loss += loss.detach().cpu().numpy()
+        train_n_samples += labels.size(0)
+        train_n_corrects += torch.sum(pred_max == labels).detach().cpu().numpy()
+
+        loss.backward()
+        optimizer.step()
+        scheduler.step()
 
     return model, epoch_train_loss, epoch_train_acc
+
 def train_MACM(model, train_loader, optimizer, scheduler, criterion, cur_epoch, device, **kwargs):
     """
         Author: Junyoung Park (jy_park@inu.ac.kr)
 
-        train_k_fold_MCACM - Training code for Multiscale Attentive CutMix
+        train_k_MCACM - Training code for Multiscale Attentive CutMix
 
         model(torch.nn.Module): Target model to train.
         train_loader(list(DataLoader)): Should be a list with splitted dataset.
@@ -86,7 +151,7 @@ def train_MACM(model, train_loader, optimizer, scheduler, criterion, cur_epoch, 
     train_n_corrects = 0
     train_n_samples = 0
 
-    for idx, data in enumerate(train_loader[cur_train_fold]):
+    for idx, data in enumerate(train_loader):
 
         batch, labels = data[0].to(device), data[1].to(device)
         
@@ -163,18 +228,13 @@ def train_MACM(model, train_loader, optimizer, scheduler, criterion, cur_epoch, 
         optimizer.step()
         scheduler.step()
 
-        print_v(f"\t\t\t - Training loss : {train_loss:.4f}", flag_vervose)
-        print_v(f"\t\t\t - Training accuracy : {train_acc*100:.4f}%", flag_vervose)
-
-      
-
     return model, epoch_train_loss, epoch_train_acc
 
 def train_MCACM(model, train_loader, optimizer, scheduler, criterion, cur_epoch, device, **kwargs):
     """
         Author: Junyoung Park (jy_park@inu.ac.kr)
 
-        train_k_fold_MCACM - Training code for Multiscale Class Attentive CutMix
+        train_k_MCACM - Training code for Multiscale Class Attentive CutMix
 
         model(torch.nn.Module): Target model to train.
         train_loader(list(DataLoader)): Should be a list with splitted dataset.
@@ -196,7 +256,7 @@ def train_MCACM(model, train_loader, optimizer, scheduler, criterion, cur_epoch,
     train_n_corrects = 0
     train_n_samples = 0
 
-    for idx, data in enumerate(train_loader[cur_train_fold]):
+    for idx, data in enumerate(train_loader):
 
         batch, labels = data[0].to(device), data[1].to(device)
         
@@ -291,11 +351,6 @@ def train_MCACM(model, train_loader, optimizer, scheduler, criterion, cur_epoch,
         loss.backward()
         optimizer.step()
         scheduler.step()
-
-        print_v(f"\t\t\t - Training loss : {train_loss:.4f}", flag_vervose)
-        print_v(f"\t\t\t - Training accuracy : {train_acc*100:.4f}%", flag_vervose)
-
-      
 
     return model, epoch_train_loss, epoch_train_acc
 
