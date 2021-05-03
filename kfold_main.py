@@ -16,7 +16,7 @@ parser.add_argument('--net_type', default='resnet50', type=str,
 parser.add_argument('--pretrained', action='store_true')
 parser.add_argument('--gpus', type=str, default='0')
 
-parser.add_argument('--num_epochs', type=int, default=100)
+parser.add_argument('--num_epochs', type=int, default=25)
 parser.add_argument('--num_folds', type=int, default=5)
 
 parser.add_argument('--num_workers', type=int, default=4)
@@ -26,7 +26,7 @@ parser.add_argument('--weight_decay', type=float, default=1e-4)
 parser.add_argument('--scheduler_step', type=int, default=25)
 
 parser.add_argument('--expr_name', type=str, default="default")
-parser.add_argument('--dataset_root', type=str, default="../mosquitoClassification/MosquitoDL")
+parser.add_argument('--dataset_root', type=str, default="~/datasets/MosquitoDL")
 parser.add_argument('--flag_vervose', action='store_true')
 parser.add_argument('--single_scale', action='store_true')
 
@@ -298,6 +298,8 @@ for epoch in range(num_epochs):
     print(f"- Epoch time: {epoch_t_gm.tm_hour}[h] {epoch_t_gm.tm_min}[m] {epoch_t_gm.tm_sec}[s]")
     print(f"- Elapsed time: {elapsed_time_gm.tm_hour}[h] {elapsed_time_gm.tm_min}[m] {elapsed_time_gm.tm_sec}[s]")
     print(f"- Estimated time: {estimated_time_gm.tm_hour}[h] {estimated_time_gm.tm_min}[m] {estimated_time_gm.tm_sec}[s]")
-    
+
+print(f"Finished with the best test accuracy: {best_test_acc*100:.4f}")
+
 f_print.close()
 

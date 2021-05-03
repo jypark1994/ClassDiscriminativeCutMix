@@ -44,6 +44,9 @@ def train(model, train_loader, optimizer, scheduler, criterion, cur_epoch, devic
             ax.set_title(f"Train Batch Examples")
             ax.axis('off')
             fig.savefig(os.path.join(save_path, f"Train_BatchSample_E{cur_epoch}_I{idx}.png"))
+            plt.draw()
+            plt.clf()
+            plt.close("all")
             
         train_loss += loss.detach().cpu().numpy()
         train_n_samples += labels.size(0)
@@ -51,7 +54,8 @@ def train(model, train_loader, optimizer, scheduler, criterion, cur_epoch, devic
 
         loss.backward()
         optimizer.step()
-        scheduler.step()
+   
+    scheduler.step()
 
     epoch_train_loss = train_loss / len(train_loader)
     epoch_train_acc = train_n_corrects/train_n_samples
@@ -116,6 +120,9 @@ def train_CutMix(model, train_loader, optimizer, scheduler, criterion, cur_epoch
             ax.set_title(f"Train Batch Examples")
             ax.axis('off')
             fig.savefig(os.path.join(save_path, f"Train_BatchSample_E{cur_epoch}_I{idx}.png"))
+            plt.draw()
+            plt.clf()
+            plt.close("all")
             
         train_loss += loss.detach().cpu().numpy()
         train_n_samples += labels.size(0)
@@ -123,7 +130,8 @@ def train_CutMix(model, train_loader, optimizer, scheduler, criterion, cur_epoch
 
         loss.backward()
         optimizer.step()
-        scheduler.step()
+    
+    scheduler.step()
 
     epoch_train_loss = train_loss / len(train_loader)
     epoch_train_acc = train_n_corrects/train_n_samples
@@ -223,6 +231,9 @@ def train_MACM(model, train_loader, optimizer, scheduler, criterion, cur_epoch, 
             ax.set_title(f"Train MACM Batch Examples\nCut_Prob:{cut_prob}, Cur_Target: {target_stage_name}, Num_occlusion: {top_k_for_stage} ")
             ax.axis('off')
             fig.savefig(os.path.join(save_path, f"Train_BatchSample_E{cur_epoch}_I{idx}.png"))
+            plt.draw()
+            plt.clf()
+            plt.close("all")
             
         train_loss += loss.detach().cpu().numpy()
         train_n_samples += labels.size(0)
@@ -230,7 +241,8 @@ def train_MACM(model, train_loader, optimizer, scheduler, criterion, cur_epoch, 
 
         loss.backward()
         optimizer.step()
-        scheduler.step()
+    
+    scheduler.step()
 
     epoch_train_loss = train_loss / len(train_loader)
     epoch_train_acc = train_n_corrects/train_n_samples
@@ -350,6 +362,9 @@ def train_MCACM(model, train_loader, optimizer, scheduler, criterion, cur_epoch,
             ax.set_title(f"Train MCACM Batch Examples\nCut_Prob:{cut_prob}, Cur_Target: {target_stage_name}, Num_occlusion: {top_k_for_stage} ")
             ax.axis('off')
             fig.savefig(os.path.join(save_path, f"Train_BatchSample_E{cur_epoch}_I{idx}.png"))
+            plt.draw()
+            plt.clf()
+            plt.close("all")
             
         train_loss += loss.detach().cpu().numpy()
         train_n_samples += labels.size(0)
@@ -357,7 +372,8 @@ def train_MCACM(model, train_loader, optimizer, scheduler, criterion, cur_epoch,
 
         loss.backward()
         optimizer.step()
-        scheduler.step()
+    
+    scheduler.step()
 
     epoch_train_loss = train_loss / len(train_loader)
     epoch_train_acc = train_n_corrects/train_n_samples
@@ -396,6 +412,9 @@ def test(model, test_loader, criterion, device, save_path, cur_epoch):
                 ax.axis('off')
             
                 fig.savefig(os.path.join(save_path, f"Test_BatchSample_E{cur_epoch}_I{idx}.png"))
+                plt.draw()
+                plt.clf()
+                plt.close("all")
 
     test_loss /= len(test_loader)
     test_acc = test_n_corrects/test_n_samples

@@ -90,9 +90,9 @@ print(" - Done !")
 
 print(f"Buliding \'{net_type}\' network...")
 
-if data_type == 'cifar': # Using BasicBlock version of resnet. (ClovaAI Implementation)
+if data_type == 'cifar': # Using 32x32 version of resnet. (ClovaAI Implementation)
     pass
-else:
+else: # Using ImageNet version of resnet.
     if net_type == 'resnet50':
         model = models.resnet50(pretrained=args.pretrained)
         model.fc = nn.Linear(model.fc.in_features, num_classes)
@@ -198,7 +198,7 @@ for epoch in range(num_epochs):
     print(f"- Elapsed time: {elapsed_time_gm.tm_hour}[h] {elapsed_time_gm.tm_min}[m] {elapsed_time_gm.tm_sec}[s]")
     print(f"- Estimated time: {estimated_time_gm.tm_hour}[h] {estimated_time_gm.tm_min}[m] {estimated_time_gm.tm_sec}[s]")
 
-print(f"Finished with the best validation accuracy: {best_test_acc*100:.4f}")
+print(f"Finished with the best validation accuracy: {best_valid_acc*100:.4f}")
     
 f_print.close()
 

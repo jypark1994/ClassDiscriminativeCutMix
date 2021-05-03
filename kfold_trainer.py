@@ -94,7 +94,7 @@ def train_k_fold(model, train_loader, optimizer, scheduler, criterion, num_folds
 
                 if idx == len(train_loader[cur_train_fold])//2 and cur_epoch % 1 == 0:
                     input_ex = make_grid(batch.detach().cpu(), normalize=True, nrow=8, padding=2).permute([1,2,0])
-                    fig, ax = plt.subplots(1,1,figsize=(8,4))
+                    fig, ax = plt.subplots(1,1,figsize=(8,(batch.size(0)//8)+1))
                     ax.imshow(input_ex)
                     ax.set_title(f"TrainVal Batch Examples")
                     ax.axis('off')
@@ -262,7 +262,7 @@ def train_k_fold_MACM(model, train_loader, optimizer, scheduler, criterion, num_
 
                 if idx == len(train_loader[cur_train_fold])//2 and cur_epoch % 1 == 0:
                     input_ex = make_grid(batch.detach().cpu(), normalize=True, nrow=8, padding=2).permute([1,2,0])
-                    fig, ax = plt.subplots(1,1,figsize=(8,4))
+                    fig, ax = plt.subplots(1,1,figsize=(8,(batch.size(0)//8)+1))
                     ax.imshow(input_ex)
                     ax.set_title(f"TrainVal MACM Batch Examples\nCut_Prob:{cut_prob}, Cur_Target: {target_stage_name}, Num_occlusion: {top_k_for_stage} ")
                     ax.axis('off')
@@ -456,7 +456,7 @@ def train_k_fold_MCACM(model, train_loader, optimizer, scheduler, criterion, num
 
                 if idx == len(train_loader[cur_train_fold])//2 and cur_epoch % 1 == 0:
                     input_ex = make_grid(batch.detach().cpu(), normalize=True, nrow=8, padding=2).permute([1,2,0])
-                    fig, ax = plt.subplots(1,1,figsize=(8,4))
+                    fig, ax = plt.subplots(1,1,figsize=(8,(batch.size(0)//8)+1))
                     ax.imshow(input_ex)
                     ax.set_title(f"TrainVal MCACM Batch Examples\nCut_Prob:{cut_prob}, Cur_Target: {target_stage_name}, Num_occlusion: {top_k_for_stage} ")
                     ax.axis('off')
@@ -551,7 +551,7 @@ def test(model, test_loader, criterion, device, save_path, cur_epoch):
 
             if idx%100 == 0 and cur_epoch % 20 == 0:
                 input_ex = make_grid(batch.detach().cpu(), normalize=True, nrow=8, padding=2).permute([1,2,0])
-                fig, ax = plt.subplots(1,1,figsize=(8,4))
+                fig, ax = plt.subplots(1,1,figsize=(8,(batch.size(0)//8)+1))
                 ax.imshow(input_ex)
                 ax.set_title(f"Testing Batch Examples")
                 ax.axis('off')
