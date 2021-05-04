@@ -76,7 +76,7 @@ class Wrapper(nn.Module):
             print("[FW] Shape:", v.shape)
         for k, v in self.dict_gradients.items():
             print("[BW] Layer:", k)      
-            print("[BW] Shape:", v.shape)
+            print("[BW] Shape:", v[0].shape)
 
     def clear_dict(self):
         for k, v in self.dict_activation.items():

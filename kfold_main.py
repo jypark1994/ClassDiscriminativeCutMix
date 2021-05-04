@@ -9,6 +9,7 @@ import time
 import argparse
 
 from kfold_trainer import train_k_fold, train_k_fold_MACM, train_k_fold_MCACM, test
+from utils import Wrapper
 
 parser = argparse.ArgumentParser(description='Train and Evaluate MosquitoDL using k-fold validation')
 parser.add_argument('--net_type', default='resnet50', type=str,
@@ -127,64 +128,17 @@ def MosquitoDL_fold(root, crop_size=224, num_folds=5, batch_size=(64, 32), num_w
 
 train_loader, test_loader, num_classes = MosquitoDL_fold(dataset_root, crop_size, num_folds, batch_size, num_workers)
 
-# %%
-class Wrapper(nn.Module):
-    '''
-        Author: Junyoung Park (jy_park@inu.ac.kr)
-    '''
-    def __init__(self, model, stage_names):
-        super(Wrapper, self).__init__()
+if net_type == 'resnet50':
+    model = models.resnet50(pretrained=args.pretrained)
+    model.fc = nn.Linear(model.fc.in_features, num_classes)
+    model = nn.DataParallel(model)
+elif net_type == 'mobilenetv2':
+    model = models.mobilenet_v2(pretrained=args.pretrained)
+    model.classifier[1] = nn.Linear(model.classifier[1].in_features, num_classes)
+    model = nn.DataParallel(model)
+else:
+    assert "Invalid 'net_type' !"
 
-        self.dict_activation = {}
-        self.dict_gradients = {}
-        self.forward_hook_handles = []
-        self.backward_hook_handles = []
-
-        self.net = model
-        self.stage_names = stage_names
-        self.num_stages = len(self.stage_names)
-
-        def forward_hook_function(name): # Hook function for the forward pass.
-            def get_class_activation(module, input, output):
-                self.dict_activation[name] = output.data
-            return get_class_activation
-
-        def backward_hook_function(name): # Hook function for the backward pass.
-            def get_class_gradient(module, input, output):
-                self.dict_gradients[name] = output
-            return get_class_gradient
-
-        for L in self.stage_names:
-            for k, v in self.net.named_modules():
-                if L in k:
-                    self.forward_hook_handles.append(v.register_forward_hook(forward_hook_function(L)))
-                    self.backward_hook_handles.append(v.register_backward_hook(backward_hook_function(L)))
-                    print(f"Registered forward/backward hook on \'{k}\'")
-                    break
-
-    def forward(self, x):
-        self.clear_dict()
-        return self.net(x)
-            
-    def print_current_dicts(self):
-        for k, v in self.dict_activation.items():
-            print("[FW] Layer:", k)
-            print("[FW] Shape:", v.shape)
-        for k, v in self.dict_gradients.items():
-            print("[BW] Layer:", k)      
-            print("[BW] Shape:", v.shape)
-
-    def clear_dict(self):
-        for k, v in self.dict_activation.items():
-            v = None
-        for k, v in self.dict_gradients.items():
-            v = None
-
-
-# %%
-model = models.resnet50(pretrained=args.pretrained)
-model.fc = nn.Linear(model.fc.in_features, num_classes)
-model = nn.DataParallel(model)
 
 # pretrained_path = './pretrained/R50_ImageNet_Baseline.pth'
 
