@@ -178,7 +178,7 @@ def MosquitoDL_loaders(root, crop_size=224, batch_size=(64, 32), num_workers=4):
                                                 shuffle=True, num_workers=num_workers)
 
     test_dataset = datasets.ImageFolder(os.path.join(root,'valid'), transform=transforms_test)
-    test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=bs_test, shuffle=True, num_workers=num_workers)
+    test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=bs_test, shuffle=False, num_workers=num_workers)
 
     num_classes = 6
 

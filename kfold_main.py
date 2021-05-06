@@ -8,7 +8,7 @@ import csv
 import time
 import argparse
 
-from kfold_trainer import train_k_fold, train_k_fold_MACM, train_k_fold_MCACM, test
+from kfold_trainer import train_k_fold, train_k_fold_CutMix, train_k_fold_MACM, train_k_fold_MCACM, test
 
 parser = argparse.ArgumentParser(description='Train and Evaluate MosquitoDL using k-fold validation')
 parser.add_argument('--net_type', default='resnet50', type=str,
@@ -182,9 +182,16 @@ class Wrapper(nn.Module):
 
 
 # %%
-model = models.resnet50(pretrained=args.pretrained)
-model.fc = nn.Linear(model.fc.in_features, num_classes)
-model = nn.DataParallel(model)
+if net_type == 'resnet50':
+    model = models.resnet50(pretrained=args.pretrained)
+    model.fc = nn.Linear(model.fc.in_features, num_classes)
+    model = nn.DataParallel(model)
+elif net_type == 'mobilenetv2':
+    model = models.mobilenet_v2(pretrained=args.pretrained)
+    model.classifier[1] = nn.Linear(model.classifier[1].in_features, num_classes)
+    model = nn.DataParallel(model)
+else:
+    assert "Invalid 'net_type' !"
 
 # pretrained_path = './pretrained/R50_ImageNet_Baseline.pth'
 
@@ -202,14 +209,18 @@ model = nn.DataParallel(model)
 #     print(f"Load pretrained state dict \'{pretrained_path}\'")
 
 if 'resnet' in net_type:
-    stage_names = ['layer1','layer2','layer3','layer4']
+    if single_scale:
+        stage_names = ['layer4']
+    else:
+        stage_names = ['layer1','layer2','layer3','layer4']
 elif net_type == 'mobilenetv2':
-    stage_names = ['features.2','features.4','features.7','features.14']
+    if single_scale:
+        stage_names = ['features.14']
+    else:
+        stage_names = ['features.2','features.4','features.7','features.14']
 else:
     assert "Unsupported network type !"
 
-if single_scale:
-        stage_names = stage_names[-1]
 
 model = Wrapper(model, stage_names) # Wrapper for registering hooks for 'stage_names' of the 'model'.
 
@@ -247,11 +258,11 @@ for epoch in range(num_epochs):
     elif train_mode == 'MACM': # Multiscale Attentive Cutmix
         model, (epoch_train_loss, epoch_train_acc), (epoch_valid_loss, epoch_valid_acc) = \
             train_k_fold_MACM(model, train_loader, optimizer, scheduler, criterion, num_folds, epoch, device, flag_vervose=flag_vervose, \
-            net_type='resnet', k=args.k, image_priority=args.cut_mode, cut_prob=args.cut_prob, save_path=save_path, target_mode='label')
+            net_type='resnet', k=args.k, image_priority=args.cut_mode, cut_prob=args.cut_prob, save_path=save_path, target_mode=args.cam_mode)
     elif train_mode == 'MCACM': # Multiscale Class Attentive Cutmix
         model, (epoch_train_loss, epoch_train_acc), (epoch_valid_loss, epoch_valid_acc) = \
             train_k_fold_MCACM(model, train_loader, optimizer, scheduler, criterion, num_folds, epoch, device, flag_vervose=flag_vervose, \
-            net_type='resnet', k=args.k, image_priority=args.cut_mode, cut_prob=args.cut_prob, cam_mode=args.cam_mode, save_path=save_path, target_mode='label')
+            net_type='resnet', k=args.k, image_priority=args.cut_mode, cut_prob=args.cut_prob, cam_mode=args.cam_mode, save_path=save_path, target_mode=args.cam_mode)
     else:
         assert 'Invalid training mode !'
 

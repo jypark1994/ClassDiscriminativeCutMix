@@ -5,38 +5,7 @@ from torchvision.utils import make_grid
 import os
 import numpy as np
 import matplotlib.pyplot as plt
-
-def generate_attentive_mask(attention_map, top_k):
-    """
-        Author: Junyoung Park (jy_park@inu.ac.kr)
-
-        Input:
-            attention_map   (Tensor) : NxWxH tensor after GAP.
-            top_k           (Tensor) : Number of candidates of the most intense points.
-        Output:
-            mask            (Tensor) : NxWxH tensor for masking attentive regions
-            coords          (Tensor) : Normalized coordinates(cx, cy) for masked regions
-    """
-    N, W, H = attention_map.shape
-
-    x = attention_map.reshape([N, W *H])
-
-    _, indices = torch.sort(x, descending=True, dim=1)
-    top_indices = indices[:, :top_k] # [N, Top_k]
-
-    mask = torch.ones_like(x)
-
-    for i in range(N):
-        mask[i, top_indices[i]] = 0
-    
-    mask = mask.reshape([N, W, H])
-    # print_v(mask)
-
-    return mask
-
-def print_v(str_t, vervose=False):
-    if vervose:
-        print(str_t)
+from utils import rand_bbox, generate_attentive_mask, print_v
 
 def train_k_fold(model, train_loader, optimizer, scheduler, criterion, num_folds, cur_epoch, device, **kwargs):
     """
@@ -97,6 +66,150 @@ def train_k_fold(model, train_loader, optimizer, scheduler, criterion, num_folds
                     fig, ax = plt.subplots(1,1,figsize=(8,(batch.size(0)//8)+1))
                     ax.imshow(input_ex)
                     ax.set_title(f"TrainVal Batch Examples")
+                    ax.axis('off')
+                    fig.savefig(os.path.join(save_path, f"TrainVal_BatchSample_E{cur_epoch}_F{idx}.png"))
+                    plt.draw()
+                    plt.clf()
+                    plt.close("all")
+
+                loss.backward()
+                optimizer.step()
+                
+
+            fold_train_loss /= fold_train_n_samples
+            fold_train_acc = fold_train_n_corrects / fold_train_n_samples
+
+            mean_fold_train_loss += fold_train_loss
+            mean_fold_train_acc += fold_train_acc    
+
+            print_v(f"\t\t\t - Fold training loss : {fold_train_loss:.4f}", flag_vervose)
+            print_v(f"\t\t\t - Fold training accuracy : {fold_train_acc*100:.4f}%", flag_vervose)
+
+        mean_fold_train_loss /= (num_folds - 1)
+        mean_fold_train_acc /= (num_folds - 1)
+        print_v(f"\t\t - Mean Fold training loss : {mean_fold_train_loss:.4f}", flag_vervose)
+        print_v(f"\t\t - Mean Fold training accuracy : {mean_fold_train_acc*100:.4f}%", flag_vervose)
+
+        fold_valid_loss = 0
+        fold_valid_n_corrects = 0
+        fold_valid_n_samples = 0
+
+        model.eval()
+        with torch.no_grad():
+            print_v(f"\t\t - Validation: {cur_val_fold+1}/{num_folds}", flag_vervose)
+            for idx, batch in enumerate(train_loader[cur_val_fold]):
+                batch, labels = data[0].to(device), data[1].to(device)
+ 
+                pred = model(batch)
+                pred_max = torch.argmax(pred, 1)
+
+                loss = criterion(pred, labels)
+
+                fold_valid_loss += loss.detach().cpu().numpy()
+                fold_valid_n_samples += labels.size(0)
+                fold_valid_n_corrects += torch.sum(pred_max == labels).detach().cpu().numpy()
+
+        fold_valid_loss /= fold_valid_n_samples
+        fold_valid_acc = fold_valid_n_corrects / fold_valid_n_samples
+
+        print_v(f"\t\t\t - Fold validation loss : {fold_valid_loss:.4f}", flag_vervose)
+        print_v(f"\t\t\t - Fold validation accuracy : {fold_valid_acc*100:.4f}%", flag_vervose)
+
+        epoch_train_loss += fold_train_loss
+        epoch_train_acc += fold_train_acc
+        epoch_valid_loss += fold_valid_loss
+        epoch_valid_acc += fold_valid_acc
+    
+    epoch_train_loss /= num_folds
+    epoch_train_acc /= num_folds
+    epoch_valid_loss /= num_folds
+    epoch_valid_acc /= num_folds
+
+    scheduler.step()
+
+    return model, (epoch_train_loss, epoch_train_acc), (epoch_valid_loss, epoch_valid_acc)
+
+
+def train_k_fold_CutMix(model, train_loader, optimizer, scheduler, criterion, num_folds, cur_epoch, device, **kwargs):
+    """
+        Author: Junyoung Park (jy_park@inu.ac.kr)
+
+        train_k_fold_cutmix - Training in K-fold cross validation with cutmix.
+
+        model(torch.nn.Module): Target model to train.
+        train_loader(list(DataLoader)): Should be a list with splitted dataset.
+        num_folds(int): Number of folds.
+        vervose(bool): Print detailed train/val status.
+    """
+    epoch_train_loss = 0
+    epoch_train_acc = 0
+    epoch_valid_loss = 0
+    epoch_valid_acc = 0
+
+    flag_vervose = kwargs['flag_vervose']
+    save_path = kwargs['save_path']
+    cut_prob = kwargs['cut_prob']
+
+
+    for cur_val_fold in range(num_folds): # Iterate for each fold.
+        print_v(f"\t --- Validation Fold: {cur_val_fold+1}/{num_folds}", flag_vervose)
+        model.train() # Train on training folds.
+
+        mean_fold_train_loss = 0
+        mean_fold_train_acc = 0
+
+        for cur_train_fold in range(num_folds):
+
+            fold_train_loss = 0
+            fold_train_n_corrects = 0
+            fold_train_n_samples = 0
+
+            if(cur_train_fold == cur_val_fold):
+                print_v(f"\t\t - Skipping validation fold ({cur_val_fold+1}/{num_folds})", flag_vervose)
+                continue
+
+            print_v(f"\t\t - Training: {cur_train_fold+1}/{num_folds}", flag_vervose)
+
+            for idx, data in enumerate(train_loader[cur_train_fold]):
+
+                batch, labels = data[0].to(device), data[1].to(device)
+                
+                optimizer.zero_grad()
+
+                r = np.random.rand(1)
+
+                if r < cut_prob:
+                    # generate mixed sample
+                    lam = np.random.beta(1, 1)
+                    rand_index = torch.randperm(batch.size()[0]).cuda()
+                    labels_a = labels
+                    labels_b = labels[rand_index]
+                    
+                    bbx1, bby1, bbx2, bby2 = rand_bbox(batch.size(), lam)
+                    batch[:, :, bbx1:bbx2, bby1:bby2] = batch[rand_index, :, bbx1:bbx2, bby1:bby2]
+                    # adjust lambda to exactly match pixel ratio
+                    lam = 1 - ((bbx2 - bbx1) * (bby2 - bby1) / (batch.size()[-1] * batch.size()[-2]))
+                    # Save Input Examples
+                    
+                    # compute output
+                    pred = model(batch)
+                    loss = criterion(pred, labels_a) * lam + criterion(pred, labels_b) * (1. - lam)
+                else:
+                    # compute output
+                    pred = model(batch)
+                    loss = criterion(pred, labels)
+
+                pred_max = torch.argmax(pred, 1)
+
+                fold_train_loss += loss.detach().cpu().numpy()
+                fold_train_n_samples += labels.size(0)
+                fold_train_n_corrects += torch.sum(pred_max == labels).detach().cpu().numpy()
+
+                if idx == len(train_loader[cur_train_fold])//2 and cur_epoch % 1 == 0:
+                    input_ex = make_grid(batch.detach().cpu(), normalize=True, nrow=8, padding=2).permute([1,2,0])
+                    fig, ax = plt.subplots(1,1,figsize=(8,(batch.size(0)//8)+1))
+                    ax.imshow(input_ex)
+                    ax.set_title(f"TrainVal CutMix Batch Examples")
                     ax.axis('off')
                     fig.savefig(os.path.join(save_path, f"TrainVal_BatchSample_E{cur_epoch}_F{idx}.png"))
                     plt.draw()
