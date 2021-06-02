@@ -6,6 +6,117 @@ from transforms_imagenet import *
 import utils
 from cub200 import CUB200
 
+def IP102(root, crop_size=224, batch_size=(64,64), num_workers=8):
+    # Transforms: https://www.kaggle.com/mekouaryoussef/rendufinal
+    # Official Settings (in CVPR2019)
+    # BS = 64
+    # LR = 0.01 * 0.1 @ 40 EPOCHS
+    # WD = 5E-4, M = 0.9
+    # Input_size = 224
+
+    if isinstance(batch_size, tuple):
+        bs_train = batch_size[0]
+        bs_test = batch_size[1]
+    else:
+        bs_train, bs_test = (batch_size, batch_size)
+
+    transforms_train = transforms.Compose([
+            transforms.RandomResizedCrop(crop_size),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=(0.485, 0.456, 0.406),
+                                 std=(0.229, 0.224, 0.225))
+    ])
+    transforms_test = transforms.Compose([
+            transforms.Resize(crop_size),
+            transforms.CenterCrop(crop_size),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=(0.485, 0.456, 0.406),
+                                 std=(0.229, 0.224, 0.225))
+    ])
+
+    train_dataset = datasets.ImageFolder(os.path.join(root,'train'), transform=transforms_train)
+    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=bs_train, shuffle=True, num_workers=num_workers)
+
+    valid_dataset = datasets.ImageFolder(os.path.join(root,'val'), transform=transforms_test)
+    valid_loader = torch.utils.data.DataLoader(valid_dataset, batch_size=bs_test, shuffle=False, num_workers=num_workers)
+
+    test_dataset = datasets.ImageFolder(os.path.join(root,'test'), transform=transforms_test)
+    test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=bs_test, shuffle=False, num_workers=num_workers)
+
+    num_classes = 102
+
+
+    return train_loader, valid_loader, test_loader, num_classes
+
+
+def MosquitoDL_fold(root, crop_size=224, num_folds=5, batch_size=(64, 32), num_workers=8, ver='v2'):
+    '''
+        Author: Junyoung Park (jy_park@inu.ac.kr)
+        
+        Mosquito Classification DataLoader
+
+        num_folds(int): Use training data split with 'num_folds' for k-fold cross validation.
+        crop_size(Tuple or int): if tuple, (bs_train, bs_test). if int, use bs_train = bs_test.
+
+    '''
+
+    if isinstance(batch_size, tuple):
+        bs_train = batch_size[0]
+        bs_test = batch_size[1]
+    else:
+        bs_train, bs_test = (batch_size, batch_size)
+
+    # %%
+    init_scale = 1.15
+
+    if ver == 'v1':
+        transforms_train = transforms.Compose([
+            transforms.ColorJitter(brightness=0.1,contrast=0.2,saturation=0.2,hue=0.1),
+            transforms.RandomAffine(360,scale=[init_scale-0.15, init_scale+0.15]),
+            transforms.CenterCrop(224),
+            transforms.ToTensor(),
+            # transforms.Normalize(mean=[0.816, 0.744, 0.721],std=[0.146, 0.134, 0.121]),
+        ])
+    elif ver == 'v2':
+        transforms_train = transforms.Compose([
+            transforms.RandomAffine(360,scale=[0.5, 0.8]),
+            transforms.CenterCrop(224),
+            transforms.ColorJitter(brightness=0.1,contrast=0.2,saturation=0.2,hue=0.1),
+            transforms.RandomHorizontalFlip(0.5),
+            transforms.ToTensor(),
+        ])
+
+    transforms_test = transforms.Compose([
+        transforms.ToTensor(),
+        # transforms.Normalize(mean=[0.816, 0.744, 0.721],std=[0.146, 0.134, 0.121]),
+    ])
+
+    train_dataset = datasets.ImageFolder(os.path.join(root,'train'), transform=transforms_train)
+
+    len_fold, len_fold_rest = len(train_dataset)//num_folds, len(train_dataset) % num_folds
+
+    fold_lengths = [len_fold for x in range(num_folds)]
+
+    if(len_fold_rest != 0):
+        fold_lengths.pop()
+        fold_lengths.append(len_fold_rest + len_fold)
+
+    print(f"Dataset with length {len(train_dataset)} divided into {fold_lengths} (Sum:{sum(fold_lengths)})")
+
+    train_dataset = torch.utils.data.random_split(train_dataset, fold_lengths)
+
+    train_loader = {x: torch.utils.data.DataLoader(train_dataset[x], bs_train,
+                                                shuffle=True, num_workers=num_workers)
+                    for x in range(num_folds)}
+
+    test_dataset = datasets.ImageFolder(os.path.join(root,'valid'), transform=transforms_test)
+    test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=32, shuffle=True, num_workers=num_workers)
+
+    num_classes = 6
+
+    return train_loader, test_loader, num_classes
+
 def CIFAR_loaders(root, type='10',batch_size=(64, 32), num_workers=4):
 
     if isinstance(batch_size, tuple):
@@ -124,7 +235,7 @@ def CUB200_loaders(root, crop_size=224, batch_size=(64,32), num_workers=4):
                                  std=(0.229, 0.224, 0.225))
     ])
     val_transforms = transforms.Compose([
-            transforms.Resize(int(crop_size/0.875)),
+            transforms.Resize(crop_size),
             transforms.CenterCrop(crop_size),
             transforms.ToTensor(),
             transforms.Normalize(mean=(0.485, 0.456, 0.406),

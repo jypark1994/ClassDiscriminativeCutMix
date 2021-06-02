@@ -256,7 +256,7 @@ def main():
 
 
     if args.net_type == 'resnet':
-        stage_names = ["layer1", "layer2", "layer3","layer4"]
+        stage_names = ["layer4"]
 
     for L in stage_names:
         for k, v in model.named_modules():

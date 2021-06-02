@@ -232,7 +232,7 @@ def train_MACM(model, train_loader, optimizer, scheduler, criterion, cur_epoch, 
             pred = model(batch)
             pred_max = torch.argmax(pred, 1)
 
-            loss = criterion(pred, target_a)  * occlusion_ratio + criterion(pred, target_b) * (1 - occlusion_ratio)
+            loss = criterion(pred, target_a) * (1 - occlusion_ratio) + criterion(pred, target_b) * occlusion_ratio
 
         else:
             loss = criterion(pred, labels)
@@ -376,7 +376,7 @@ def train_MCACM(model, train_loader, optimizer, scheduler, criterion, cur_epoch,
             pred = model(batch)
             pred_max = torch.argmax(pred, 1)
 
-            loss = criterion(pred, target_a)  * occlusion_ratio + criterion(pred, target_b) * (1 - occlusion_ratio)
+            loss = criterion(pred, target_a) * (1 - occlusion_ratio) + criterion(pred, target_b) * occlusion_ratio
 
         else:
             loss = criterion(pred, labels)

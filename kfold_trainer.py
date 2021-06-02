@@ -5,7 +5,7 @@ from torchvision.utils import make_grid
 import os
 import numpy as np
 import matplotlib.pyplot as plt
-from utils import rand_bbox, generate_attentive_mask, print_v
+from utils import rand_bbox, generate_attentive_mask, generate_attentive_mask_threshold, print_v
 
 def train_k_fold(model, train_loader, optimizer, scheduler, criterion, num_folds, cur_epoch, device, **kwargs):
     """
@@ -289,8 +289,11 @@ def train_k_fold_MACM(model, train_loader, optimizer, scheduler, criterion, num_
     epoch_valid_loss = 0
     epoch_valid_acc = 0
 
+    mask_mode = kwargs['mask_mode'] # thres or top
+
     k = kwargs['k']
-    image_priority = kwargs['image_priority']
+    threshold = kwargs['threshold']
+    image_priority = kwargs['image_priority'] # A(Original first) or B(Replaced first)
     cut_prob = kwargs['cut_prob']
     flag_vervose = kwargs['flag_vervose']
     save_path = kwargs['save_path']
@@ -328,6 +331,7 @@ def train_k_fold_MACM(model, train_loader, optimizer, scheduler, criterion, num_
                 r = np.random.rand(1)
 
                 top_k_for_stage = 0
+                n_occluded_pixels=0
 
                 if r < cut_prob:
                     target_stage_index = torch.randint(low=0, high=model.num_stages, size=(1,))[0]
@@ -338,9 +342,13 @@ def train_k_fold_MACM(model, train_loader, optimizer, scheduler, criterion, num_
 
                     N, W_f, H_f = target_fmap.shape
 
-                    top_k_for_stage = k * (4**(model.num_stages - target_stage_index - 1))
-                    
-                    attention_masks = generate_attentive_mask(target_fmap, top_k = top_k_for_stage)
+                    if mask_mode == 'top':
+                        top_k_for_stage = k * (4**(model.num_stages - target_stage_index - 1))
+                        attention_masks = generate_attentive_mask(target_fmap, top_k = top_k_for_stage)
+                    elif mask_mode == 'thres':
+                        attention_masks = generate_attentive_mask_threshold(target_fmap, threshold=threshold)
+                    else:
+                        assert f'Invalid mask_mode: {mask_mode}'
 
                     upsampled_attention_masks = F.interpolate(attention_masks.unsqueeze(1).repeat([1,3,1,1]), 
                         size=batch.shape[-2:], mode='nearest')
@@ -377,7 +385,7 @@ def train_k_fold_MACM(model, train_loader, optimizer, scheduler, criterion, num_
                     input_ex = make_grid(batch.detach().cpu(), normalize=True, nrow=8, padding=2).permute([1,2,0])
                     fig, ax = plt.subplots(1,1,figsize=(8,(batch.size(0)//8)+1))
                     ax.imshow(input_ex)
-                    ax.set_title(f"TrainVal MACM Batch Examples\nCut_Prob:{cut_prob}, Cur_Target: {target_stage_name}, Num_occlusion: {top_k_for_stage} ")
+                    ax.set_title(f"TrainVal MACM Batch Examples\nCut_Prob:{cut_prob}, Cur_Target: {target_stage_name}, Num. occlusions: {n_occluded_pixels} ")
                     ax.axis('off')
                     fig.savefig(os.path.join(save_path, f"TrainVal_BatchSample_E{cur_epoch}_F{cur_train_fold}_I{idx}.png"))
                     plt.draw()
@@ -461,6 +469,9 @@ def train_k_fold_MCACM(model, train_loader, optimizer, scheduler, criterion, num
     epoch_valid_loss = 0
     epoch_valid_acc = 0
 
+    mask_mode = kwargs['mask_mode'] # thres or top
+    threshold = kwargs['threshold']
+
     k = kwargs['k']
     image_priority = kwargs['image_priority']
     cut_prob = kwargs['cut_prob']
@@ -531,14 +542,20 @@ def train_k_fold_MCACM(model, train_loader, optimizer, scheduler, criterion, num
                     class_activation_map = torch.mul(target_fmap, importance_weights).sum(dim=1, keepdim=True) # [N x 1 x W_f x H_f]
                     class_activation_map = F.relu(class_activation_map).squeeze(dim=1) # [N x W_f x H_f]
 
-                    top_k_for_stage = k * (4**(model.num_stages - target_stage_index - 1))
-                    
-                    attention_masks = generate_attentive_mask(class_activation_map, top_k = top_k_for_stage)
+                    if mask_mode == 'top':
+                        top_k_for_stage = k * (4**(model.num_stages - target_stage_index - 1))
+                        attention_masks = generate_attentive_mask(class_activation_map, top_k = top_k_for_stage)
+                        n_occluded_pixels = top_k_for_stage
+                    elif mask_mode == 'thres':
+                        top_k_for_stage = threshold
+                        attention_masks = generate_attentive_mask_threshold(class_activation_map, threshold=threshold)
+                        n_occluded_pixels = attention_masks[attention_masks == 0].sum()
+                    else:
+                        assert f'Invalid mask_mode: {mask_mode}'
 
                     upsampled_attention_masks = F.interpolate(attention_masks.unsqueeze(1).repeat([1,3,1,1]), 
                         size=batch.shape[-2:], mode='nearest')
 
-                    n_occluded_pixels = top_k_for_stage
                     n_total_pixels = W_f * H_f
 
                     rand_index = torch.randperm(batch.size()[0]).cuda()
@@ -565,18 +582,20 @@ def train_k_fold_MCACM(model, train_loader, optimizer, scheduler, criterion, num
                     loss = criterion(pred, target_a)  * occlusion_ratio + criterion(pred, target_b) * (1 - occlusion_ratio)
 
                 else:
+                    n_occluded_pixels = 0
                     loss = criterion(pred, labels)
 
                 if idx == len(train_loader[cur_train_fold])//2 and cur_epoch % 1 == 0:
                     input_ex = make_grid(batch.detach().cpu(), normalize=True, nrow=8, padding=2).permute([1,2,0])
                     fig, ax = plt.subplots(1,1,figsize=(8,(batch.size(0)//8)+1))
                     ax.imshow(input_ex)
-                    ax.set_title(f"TrainVal MCACM Batch Examples\nCut_Prob:{cut_prob}, Cur_Target: {target_stage_name}, Num_occlusion: {top_k_for_stage} ")
+                    ax.set_title(f"TrainVal MCACM Batch Examples\nCut_Prob:{cut_prob}, Cur_Target: {target_stage_name}, Num. Occlusion: {n_occluded_pixels} ")
                     ax.axis('off')
                     fig.savefig(os.path.join(save_path, f"TrainVal_BatchSample_E{cur_epoch}_F{cur_train_fold}_I{idx}.png"))
                     plt.draw()
                     plt.clf()
                     plt.close("all")
+
                 fold_train_loss += loss.detach().cpu().numpy()
                 fold_train_n_samples += labels.size(0)
                 fold_train_n_corrects += torch.sum(pred_max == labels).detach().cpu().numpy()

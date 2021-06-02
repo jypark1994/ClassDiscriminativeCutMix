@@ -8,8 +8,8 @@ import csv
 import time
 import argparse
 
-from trainer import train, train_MACM, train_MCACM, test
-from datasets import CIFAR_loaders, MosquitoDL_loaders, ImageNet_loaders, CUB200_loaders 
+from trainer_modified import train, train_CutMix, train_MACM, train_MCACM, test
+from datasets import CIFAR_loaders, MosquitoDL_loaders, ImageNet_loaders, CUB200_loaders, IP102
 from utils import Wrapper
 
 parser = argparse.ArgumentParser(description='Train and Evaluate MosquitoDL')
@@ -22,7 +22,7 @@ parser.add_argument('--gpus', type=str, default='0')
 
 parser.add_argument('--num_epochs', type=int, default=100)
 
-parser.add_argument('--num_workers', type=int, default=4)
+parser.add_argument('--num_workers', type=int, default=8)
 parser.add_argument('--batch_size', type=int, default=64)
 parser.add_argument('--crop_size', type=int, default=224)
 parser.add_argument('--learning_rate', type=float, default=5e-3)
@@ -39,6 +39,9 @@ parser.add_argument('--cut_mode', type=str, default="A")
 parser.add_argument('--cam_mode', type=str, default="label")
 parser.add_argument('--k', type=int, default=1)
 parser.add_argument('--cut_prob', type=float, default=0.5)
+
+parser.add_argument('--threshold', type=float, default=0.1)
+parser.add_argument('--mask_mode', type=str, default="top")
 
 args = parser.parse_args()
 
@@ -71,6 +74,8 @@ print(f"Building Dataloaders: {data_type}")
 
 if data_type == 'mosquitodl':
     train_loader, valid_loader, num_classes = MosquitoDL_loaders(dataset_root, crop_size, batch_size, num_workers)
+elif data_type == 'ip102':
+    train_loader, valid_loader, test_loader, num_classes = IP102(dataset_root, crop_size=args.crop_size, batch_size=args.batch_size, num_workers=args.num_workers)
 elif 'cifar' in data_type:
     if data_type == 'cifar10':
         train_loader, valid_loader, num_classes = CIFAR_loaders(dataset_root, '10', batch_size, num_workers)
@@ -97,13 +102,32 @@ else: # Using ImageNet version of resnet.
         model = models.resnet50(pretrained=args.pretrained)
         model.fc = nn.Linear(model.fc.in_features, num_classes)
         model = nn.DataParallel(model)
+    elif net_type == 'mobilenetv2':
+        model = models.mobilenet_v2(pretrained=args.pretrained)
+        model.classifier[1] = nn.Linear(model.classifier[1].in_features, num_classes)
+        model = nn.DataParallel(model)
+    elif net_type == 'vgg16':
+        model = models.vgg16(pretrained=args.pretrained)
+        model.classifier[-1] = nn.Linear(model.classifier[-1].in_features, num_classes)
+        model = nn.DataParallel(model)
     else:
-        assert 'Unsupported Network Type !'
+        assert "Invalid 'net_type' !"
 
 if 'resnet' in net_type:
-    stage_names = ['layer1','layer2','layer3','layer4']
+    if single_scale:
+        stage_names = [['layer4']]
+    else:
+        stage_names = ['layer1','layer2','layer3','layer4']
 elif net_type == 'mobilenetv2':
-    stage_names = ['features.2','features.4','features.7','features.14']
+    if single_scale:
+        stage_names = [['features.14']]
+    else:
+        stage_names = ['features.2','features.4','features.7','features.14']
+elif net_type == 'vgg16':
+    if single_scale:
+        stage_names = [['features.23']]
+    else:
+        stage_names = ['features.4', 'features.9', 'features.16','features.24']
 else:
     assert "Unsupported network type !"
 
@@ -149,11 +173,13 @@ for epoch in range(num_epochs):
     elif train_mode == 'macm': # Multiscale Attentive Cutmix
         model, epoch_train_loss, epoch_train_acc = \
             train_MACM(model, train_loader, optimizer, scheduler, criterion, epoch, device, flag_vervose=flag_vervose, \
-            net_type='resnet', k=args.k, image_priority=args.cut_mode, cut_prob=args.cut_prob, save_path=save_path, target_mode='label')
+            net_type='resnet', k=args.k, image_priority=args.cut_mode, cut_prob=args.cut_prob, save_path=save_path, target_mode='label', \
+            mask_mode=args.mask_mode, threshold=args.threshold)
     elif train_mode == 'mcacm': # Multiscale Class Attentive Cutmix
         model, epoch_train_loss, epoch_train_acc = \
             train_MCACM(model, train_loader, optimizer, scheduler, criterion, epoch, device, flag_vervose=flag_vervose, \
-            net_type='resnet', k=args.k, image_priority=args.cut_mode, cut_prob=args.cut_prob, cam_mode=args.cam_mode, save_path=save_path, target_mode='label')
+            net_type='resnet', k=args.k, image_priority=args.cut_mode, cut_prob=args.cut_prob, cam_mode=args.cam_mode, save_path=save_path, target_mode='label', \
+            mask_mode=args.mask_mode, threshold=args.threshold)
     else:
         assert 'Invalid training mode !'
 

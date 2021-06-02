@@ -6,10 +6,13 @@ import os
 import sys
 import csv
 import time
+import random
+import numpy as np
 import argparse
 
-from kfold_trainer import train_k_fold, train_k_fold_MACM, train_k_fold_MCACM, test
+from kfold_trainer import *
 from utils import Wrapper
+from datasets import *
 
 parser = argparse.ArgumentParser(description='Train and Evaluate MosquitoDL using k-fold validation')
 parser.add_argument('--net_type', default='resnet50', type=str,
@@ -27,17 +30,32 @@ parser.add_argument('--weight_decay', type=float, default=1e-4)
 parser.add_argument('--scheduler_step', type=int, default=25)
 
 parser.add_argument('--expr_name', type=str, default="default")
-parser.add_argument('--dataset_root', type=str, default="~/datasets/MosquitoDL")
+parser.add_argument('--dataset_root', type=str, default="./tools/augmented")
 parser.add_argument('--flag_vervose', action='store_true')
 parser.add_argument('--single_scale', action='store_true')
+parser.add_argument('--deterministic', action='store_true')
 
 parser.add_argument('--train_mode', type=str, default="cutmix")
 parser.add_argument('--cut_mode', type=str, default="A")
 parser.add_argument('--cam_mode', type=str, default="label")
+parser.add_argument('--mask_mode', type=str, default="top")
 parser.add_argument('--k', type=int, default=1)
+parser.add_argument('--threshold', type=float, default=0.1)
 parser.add_argument('--cut_prob', type=float, default=0.5)
 
 args = parser.parse_args()
+
+# ---- Randomness Control ----
+if args.deterministic:
+    rand_seed = 0
+
+    torch.manual_seed(rand_seed)
+    np.random.seed(rand_seed)
+    random.seed(rand_seed)
+
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+# ----------------------------
 
 os.environ['CUDA_VISIBLE_DEVICES'] = args.gpus
 
@@ -59,6 +77,8 @@ flag_vervose = args.flag_vervose
 single_scale = args.single_scale
 scheduler_step = args.scheduler_step
 target_mode = args.cam_mode
+mask_mode = args.mask_mode
+threshold = args.threshold
 
 os.makedirs(save_path, exist_ok=True)
 
@@ -68,85 +88,25 @@ sys.stdout = f_print # Change the standard output to the file we created.
 
 print(args)
 
-def MosquitoDL_fold(root, crop_size=224, num_folds=5, batch_size=(64, 32), num_workers=8):
-    '''
-        Author: Junyoung Park (jy_park@inu.ac.kr)
-        
-        Mosquito Classification DataLoader
 
-        num_folds(int): Use training data split with 'num_folds' for k-fold cross validation.
-        crop_size(Tuple or int): if tuple, (bs_train, bs_test). if int, use bs_train = bs_test.
 
-    '''
-
-    if isinstance(batch_size, tuple):
-        bs_train = batch_size[0]
-        bs_test = batch_size[1]
-    else:
-        bs_train, bs_test = (batch_size, batch_size)
-
-    # %%
-    init_scale = 1.15
-    transforms_train = transforms.Compose([
-        transforms.ColorJitter(brightness=0.1,contrast=0.2,saturation=0.2,hue=0.1),
-        transforms.RandomAffine(360,scale=[init_scale-0.15, init_scale+0.15]),
-        transforms.CenterCrop(224),
-        transforms.ToTensor(),
-        # transforms.Normalize(mean=[0.816, 0.744, 0.721],std=[0.146, 0.134, 0.121]),
-    ])
-
-    transforms_test = transforms.Compose([
-        transforms.CenterCrop(224),
-        transforms.ToTensor(),
-        # transforms.Normalize(mean=[0.816, 0.744, 0.721],std=[0.146, 0.134, 0.121]),
-    ])
-
-    train_dataset = datasets.ImageFolder(os.path.join(root,'train'), transform=transforms_train)
-
-    len_fold, len_fold_rest = len(train_dataset)//num_folds, len(train_dataset) % num_folds
-
-    fold_lengths = [len_fold for x in range(num_folds)]
-
-    if(len_fold_rest != 0):
-        fold_lengths.pop()
-        fold_lengths.append(len_fold_rest + len_fold)
-
-    print(f"Dataset with length {len(train_dataset)} divided into {fold_lengths} (Sum:{sum(fold_lengths)})")
-
-    train_dataset = torch.utils.data.random_split(train_dataset, fold_lengths)
-
-    train_loader = {x: torch.utils.data.DataLoader(train_dataset[x], bs_train,
-                                                shuffle=True, num_workers=num_workers)
-                    for x in range(num_folds)}
-
-    test_dataset = datasets.ImageFolder(os.path.join(root,'valid'), transform=transforms_test)
-    test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=32, shuffle=True, num_workers=num_workers)
-
-    num_classes = 6
-
-    return train_loader, test_loader, num_classes
-
-train_loader, test_loader, num_classes = MosquitoDL_fold(dataset_root, crop_size, num_folds, batch_size, num_workers)
+train_loader, test_loader, num_classes = MosquitoDL_fold(dataset_root, crop_size, num_folds, batch_size, num_workers, ver='v2')
 
 if net_type == 'resnet50':
     model = models.resnet50(pretrained=args.pretrained)
+    model.fc = nn.Linear(model.fc.in_features, num_classes)
+    model = nn.DataParallel(model)
+elif net_type == 'resnet18':
+    model = models.resnet18(pretrained=args.pretrained)
     model.fc = nn.Linear(model.fc.in_features, num_classes)
     model = nn.DataParallel(model)
 elif net_type == 'mobilenetv2':
     model = models.mobilenet_v2(pretrained=args.pretrained)
     model.classifier[1] = nn.Linear(model.classifier[1].in_features, num_classes)
     model = nn.DataParallel(model)
-else:
-    assert "Invalid 'net_type' !"
-
-# %%
-if net_type == 'resnet50':
-    model = models.resnet50(pretrained=args.pretrained)
-    model.fc = nn.Linear(model.fc.in_features, num_classes)
-    model = nn.DataParallel(model)
-elif net_type == 'mobilenetv2':
-    model = models.mobilenet_v2(pretrained=args.pretrained)
-    model.classifier[1] = nn.Linear(model.classifier[1].in_features, num_classes)
+elif net_type == 'vgg16':
+    model = models.vgg16(pretrained=args.pretrained)
+    model.classifier[-1] = nn.Linear(model.classifier[-1].in_features, num_classes)
     model = nn.DataParallel(model)
 else:
     assert "Invalid 'net_type' !"
@@ -176,6 +136,11 @@ elif net_type == 'mobilenetv2':
         stage_names = ['features.14']
     else:
         stage_names = ['features.2','features.4','features.7','features.14']
+elif net_type == 'vgg16':
+    if single_scale:
+        stage_names = ['features.23']
+    else:
+        stage_names = ['features.4', 'features.9', 'features.16','features.24']
 else:
     assert "Unsupported network type !"
 
@@ -216,11 +181,13 @@ for epoch in range(num_epochs):
     elif train_mode == 'MACM': # Multiscale Attentive Cutmix
         model, (epoch_train_loss, epoch_train_acc), (epoch_valid_loss, epoch_valid_acc) = \
             train_k_fold_MACM(model, train_loader, optimizer, scheduler, criterion, num_folds, epoch, device, flag_vervose=flag_vervose, \
-            net_type='resnet', k=args.k, image_priority=args.cut_mode, cut_prob=args.cut_prob, save_path=save_path, target_mode=args.cam_mode)
+            net_type='resnet', k=args.k, image_priority=args.cut_mode, cut_prob=args.cut_prob, save_path=save_path, target_mode=args.cam_mode, \
+            mask_mode=mask_mode, threshold=threshold)
     elif train_mode == 'MCACM': # Multiscale Class Attentive Cutmix
         model, (epoch_train_loss, epoch_train_acc), (epoch_valid_loss, epoch_valid_acc) = \
             train_k_fold_MCACM(model, train_loader, optimizer, scheduler, criterion, num_folds, epoch, device, flag_vervose=flag_vervose, \
-            net_type='resnet', k=args.k, image_priority=args.cut_mode, cut_prob=args.cut_prob, cam_mode=args.cam_mode, save_path=save_path, target_mode=args.cam_mode)
+            net_type='resnet', k=args.k, image_priority=args.cut_mode, cut_prob=args.cut_prob, cam_mode=args.cam_mode, save_path=save_path, target_mode=args.cam_mode, \
+            mask_mode=mask_mode, threshold=threshold)
     else:
         assert 'Invalid training mode !'
 

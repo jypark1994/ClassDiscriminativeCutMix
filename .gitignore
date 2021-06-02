@@ -2,6 +2,8 @@ __pycache__/
 .idea/
 runs/
 results/
+Backup/pretrained
 pretrained/
+tools/augmented
 requirements.txt
 *.txt
