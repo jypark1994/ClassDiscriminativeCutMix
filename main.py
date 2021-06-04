@@ -142,8 +142,19 @@ print(f"\t - Done !")
 
 print("Building Optimizer Related Objects")
 criterion = torch.nn.CrossEntropyLoss()
-optimizer = optim.SGD(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay, momentum=0.9)
-scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=args.scheduler_step, gamma=0.1)
+if data_type == 'cub200':
+    optimizer = optim.SGD([
+        {'params': model.net.module.conv1.parameters()},
+        {'params': model.net.module.layer1.parameters()},
+        {'params': model.net.module.layer2.parameters()},
+        {'params': model.net.module.layer3.parameters()},
+        {'params': model.net.module.layer4.parameters()},
+        {'params': model.net.module.fc.parameters(), 'lr': 1e-3}
+        ], lr=args.learning_rate, weight_decay=args.weight_decay, momentum=0.9)
+    scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[40, 70, 90], gamma=0.1)
+else:
+    optimizer = optim.SGD(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay, momentum=0.9)
+    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=args.scheduler_step, gamma=0.1)
 print(f"\t - Done !")
 # %%
 

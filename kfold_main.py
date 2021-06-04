@@ -30,7 +30,7 @@ parser.add_argument('--weight_decay', type=float, default=1e-4)
 parser.add_argument('--scheduler_step', type=int, default=25)
 
 parser.add_argument('--expr_name', type=str, default="default")
-parser.add_argument('--dataset_root', type=str, default="./tools/augmented")
+parser.add_argument('--dataset_root', type=str, default="~/datasets/MosquitoDL_TestAug")
 parser.add_argument('--flag_vervose', action='store_true')
 parser.add_argument('--single_scale', action='store_true')
 parser.add_argument('--deterministic', action='store_true')
@@ -90,7 +90,7 @@ print(args)
 
 
 
-train_loader, test_loader, num_classes = MosquitoDL_fold(dataset_root, crop_size, num_folds, batch_size, num_workers, ver='v2')
+train_loader, test_loader, num_classes = MosquitoDL_fold(dataset_root, crop_size, num_folds, batch_size, num_workers, ver='v1')
 
 if net_type == 'resnet50':
     model = models.resnet50(pretrained=args.pretrained)

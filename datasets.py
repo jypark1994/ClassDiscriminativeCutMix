@@ -2,6 +2,7 @@ import os
 
 import torch
 from torchvision import datasets, transforms
+from torchvision.transforms.transforms import Resize
 from transforms_imagenet import *
 import utils
 from cub200 import CUB200
@@ -84,6 +85,15 @@ def MosquitoDL_fold(root, crop_size=224, num_folds=5, batch_size=(64, 32), num_w
             transforms.CenterCrop(224),
             transforms.ColorJitter(brightness=0.1,contrast=0.2,saturation=0.2,hue=0.1),
             transforms.RandomHorizontalFlip(0.5),
+            transforms.ToTensor(),
+        ])
+    elif ver == 'v3':
+        transforms_train = transforms.Compose([
+            transforms.RandomAffine(360,scale=[0.8, 1.2]),
+            transforms.CenterCrop(224),
+            transforms.ColorJitter(brightness=0.2,contrast=0.4,saturation=0.4,hue=0.2),
+            transforms.RandomHorizontalFlip(0.5),
+            transforms.RandomVerticalFlip(0.5),
             transforms.ToTensor(),
         ])
 
@@ -216,7 +226,7 @@ def ImageNet_loaders(root, batch_size=(64, 32), num_workers=4):
     return train_loader, val_loader, num_classes
 
 def CUB200_loaders(root, crop_size=224, batch_size=(64,32), num_workers=4):
-
+    
     if isinstance(batch_size, tuple):
         bs_train = batch_size[0]
         bs_test = batch_size[1]
@@ -228,14 +238,15 @@ def CUB200_loaders(root, crop_size=224, batch_size=(64,32), num_workers=4):
     # Apply same transforms as 'https://github.com/zhangyongshun/resnet_finetune_cub'
 
     train_transforms = transforms.Compose([
-            transforms.RandomResizedCrop(crop_size),
+            transforms.Resize(int(crop_size*1.1429)),
+            transforms.RandomCrop(crop_size),
             transforms.RandomHorizontalFlip(),
             transforms.ToTensor(),
             transforms.Normalize(mean=(0.485, 0.456, 0.406),
                                  std=(0.229, 0.224, 0.225))
     ])
     val_transforms = transforms.Compose([
-            transforms.Resize(crop_size),
+            transforms.Resize(int(crop_size*1.1429)),
             transforms.CenterCrop(crop_size),
             transforms.ToTensor(),
             transforms.Normalize(mean=(0.485, 0.456, 0.406),
@@ -248,6 +259,40 @@ def CUB200_loaders(root, crop_size=224, batch_size=(64,32), num_workers=4):
     val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=bs_test, shuffle=True, num_workers=num_workers)
 
     return train_loader, val_loader, num_classes
+
+# def CUB200_loaders(root, crop_size=224, batch_size=(64,32), num_workers=4):
+
+#     if isinstance(batch_size, tuple):
+#         bs_train = batch_size[0]
+#         bs_test = batch_size[1]
+#     else:
+#         bs_train, bs_test = (batch_size, batch_size)
+
+#     num_classes = 200
+
+#     # Apply same transforms as 'https://github.com/zhangyongshun/resnet_finetune_cub'
+
+#     train_transforms = transforms.Compose([
+#             transforms.RandomResizedCrop(crop_size),
+#             transforms.RandomHorizontalFlip(),
+#             transforms.ToTensor(),
+#             transforms.Normalize(mean=(0.485, 0.456, 0.406),
+#                                  std=(0.229, 0.224, 0.225))
+#     ])
+#     val_transforms = transforms.Compose([
+#             transforms.Resize(crop_size),
+#             transforms.CenterCrop(crop_size),
+#             transforms.ToTensor(),
+#             transforms.Normalize(mean=(0.485, 0.456, 0.406),
+#                                  std=(0.229, 0.224, 0.225))
+#     ])
+
+#     train_dataset = CUB200(root, transform = train_transforms, train=True, download=False)
+#     train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=bs_train, shuffle=True, num_workers=num_workers)
+#     val_dataset = CUB200(root, transform = val_transforms, train=False, download=False)
+#     val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=bs_test, shuffle=True, num_workers=num_workers)
+
+#     return train_loader, val_loader, num_classes
 
 def MosquitoDL_loaders(root, crop_size=224, batch_size=(64, 32), num_workers=4):
     '''
